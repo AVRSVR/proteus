@@ -201,6 +201,19 @@ Rosetta sits *after* the loop, not inside it. A FastRelax costs seconds to minut
 
 Freezing is applied in **both** the resfile (`NATRO`, controlling identity) and the MoveMap (controlling coordinates). Either alone is insufficient; the prototype set neither.
 
+### Platform reality
+
+Both backends were attempted on a Windows 11 machine with 7.8 GB RAM and neither could run there. The blockers are environmental, not code:
+
+| backend | blocker | workaround |
+| --- | --- | --- |
+| PyRosetta | **no Windows wheel** — `pyrosetta-installer` aborts with "Could not find PyRosetta wheel for 'windows'" | Linux, WSL2, or a Kaggle/Colab notebook — see [`examples/kaggle_refine.py`](examples/kaggle_refine.py) |
+| ESMFold | `esmfold_v1` bundles ESM-2 3B and needs roughly **16 GB RAM** on CPU | GPU runtime on Kaggle/Colab, or any machine with more memory |
+
+WSL2 is the natural escape hatch for PyRosetta, but on the test machine the VM itself would not start (`HCS_E_CONNECTION_TIMEOUT`), which is a Hyper-V/virtualisation setting rather than anything Proteus controls.
+
+The practical split: run the cheap loop anywhere, run the adjudication where a Linux host and real memory are available.
+
 ### Installing the optional backends
 
 ```bash
