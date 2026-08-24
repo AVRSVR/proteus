@@ -272,3 +272,68 @@ def test_membrane_run_uses_membrane_strategies_only():
     used = {s for m in result.trajectory for s in m.strategies}
     assert "core_packing" not in used
     assert "surface_depolarize" not in used
+
+
+# --------------------------------------------------------------- provenance
+
+def test_every_surviving_mutation_is_attributed():
+    """A mutation with no proposing strategy would mean the loop is not
+    actually driven by the strategy library."""
+    st = poor_bundle()
+    ctx = DesignContext(structure=st, frozen=frozenset(range(1, 9)))
+    result = Engine(ctx, seed=0).run(generations=25)
+    prov = result.provenance()
+    assert prov, "run produced no changes at all"
+    unattributed = [p for p, (_o, _n, why) in prov.items() if not why]
+    assert not unattributed, f"unattributed positions: {unattributed}"
+
+
+def test_provenance_matches_the_accepted_walk():
+    """Provenance must reproduce the last accepted sequence exactly.
+
+    It tracks the accepted trajectory, so it is checked against the final
+    accepted state rather than against ``best_sequence`` -- the best score can
+    occur at an earlier point on that walk.
+    """
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    result = Engine(ctx, seed=0).run(generations=25)
+    accepted = [m for m in result.trajectory if m.accepted]
+    if not accepted:
+        pytest.skip("no moves were accepted")
+    final = accepted[-1].sequence
+
+    prov = result.provenance()
+    for pos, (old, new, _why) in prov.items():
+        assert old == st.sequence[pos - 1]
+        assert new == final[pos - 1]
+
+    truly_changed = {i + 1 for i, (a, b) in enumerate(zip(st.sequence, final))
+                     if a != b}
+    assert set(prov) == truly_changed
+
+
+def test_provenance_excludes_positions_changed_and_reverted():
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    result = Engine(ctx, seed=1).run(generations=30)
+    for pos, (old, new, _why) in result.provenance().items():
+        assert old != new
+
+
+def test_frozen_positions_never_appear_in_provenance():
+    st = poor_bundle()
+    frozen = frozenset(range(1, 16))
+    ctx = DesignContext(structure=st, frozen=frozen)
+    result = Engine(ctx, seed=0).run(generations=25)
+    assert not (set(result.provenance()) & frozen)
+
+
+def test_credit_only_counts_surviving_mutations():
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    result = Engine(ctx, seed=0).run(generations=25)
+    credit = result.credit()
+    if credit:
+        assert all(v > 0 for v in credit.values())
+        assert set(credit) <= {s for m in result.trajectory for s in m.strategies}

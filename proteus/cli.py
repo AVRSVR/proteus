@@ -114,6 +114,16 @@ def cmd_run(args) -> int:
     print("start:", ctx.structure.sequence)
     print("best :", result.best_sequence)
 
+    if args.explain:
+        print()
+        print(result.explain())
+        credit = result.credit()
+        if credit:
+            print()
+            print("surviving mutations per strategy:")
+            for name, n in sorted(credit.items(), key=lambda kv: -kv[1]):
+                print(f"  {name:<26} {n}")
+
     if knowledge is not None:
         knowledge.save(args.knowledge)
         print(f"\nknowledge base now holds {len(knowledge)} observations "
@@ -198,6 +208,9 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--knowledge", metavar="PATH",
                        help="accumulate and reuse what works across runs; the "
                             "file is created if it does not exist")
+    p_run.add_argument("--explain", action="store_true",
+                       help="print every changed position and the mechanism "
+                            "that proposed it")
     p_run.add_argument("-q", "--quiet", action="store_true")
     p_run.set_defaults(func=cmd_run)
 

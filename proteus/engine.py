@@ -45,6 +45,12 @@ class Move:
     n_designed: int
     n_conflicts: int
     mutations: tuple[tuple[int, str, str], ...] = ()
+    #: position -> the strategies that proposed it on this move. Recorded live
+    #: rather than reconstructed: strategies sample their positions randomly,
+    #: so a replay with a fresh RNG attributes the wrong ones.
+    attribution: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    #: position -> why, in words, from the winning proposal.
+    rationale: dict[int, str] = field(default_factory=dict)
 
     def describe(self) -> str:
         verdict = "accept" if self.accepted else "reject"
@@ -76,6 +82,52 @@ class RunResult:
     @property
     def n_accepted(self) -> int:
         return sum(1 for m in self.trajectory if m.accepted)
+
+    def provenance(self) -> dict[int, tuple[str, str, str]]:
+        """Every position that ended up changed, and why.
+
+        Maps position -> (original, final, reason), walking the accepted moves
+        in order so the reason is the one from the move that last set it.
+        """
+        current: dict[int, tuple[str, str, str]] = {}
+        for move in self.trajectory:
+            if not move.accepted:
+                continue
+            for pos, old, new in move.mutations:
+                first = current.get(pos, (old, new, ""))[0]
+                reason = move.rationale.get(pos, "")
+                if not reason and pos in move.attribution:
+                    reason = "+".join(move.attribution[pos])
+                current[pos] = (first, new, reason)
+        # Drop positions that were changed and later changed back.
+        return {p: v for p, v in current.items() if v[0] != v[1]}
+
+    def credit(self) -> dict[str, int]:
+        """How many surviving mutations each strategy is responsible for."""
+        from collections import Counter
+        counts: Counter[str] = Counter()
+        surviving = set(self.provenance())
+        for move in self.trajectory:
+            if not move.accepted:
+                continue
+            for pos, names in move.attribution.items():
+                if pos in surviving:
+                    for name in names:
+                        counts[name] += 1
+        return dict(counts)
+
+    def explain(self, limit: int | None = None) -> str:
+        """Human-readable account of what was changed and on what grounds."""
+        prov = self.provenance()
+        if not prov:
+            return "no positions changed"
+        lines = [f"{len(prov)} positions changed"]
+        for pos in sorted(prov)[:limit]:
+            old, new, why = prov[pos]
+            lines.append(f"  {pos:>4} {old}->{new}  {why or '(unattributed)'}")
+        if limit and len(prov) > limit:
+            lines.append(f"  ... and {len(prov) - limit} more")
+        return "\n".join(lines)
 
     def summary(self) -> str:
         lines = [
@@ -303,11 +355,17 @@ class Engine:
                 (i + 1, a, b) for i, (a, b) in enumerate(zip(current_seq, candidate))
                 if a != b
             )
+            changed = {pos for pos, _, _ in mutations}
             move = Move(
                 generation=gen, strategies=tuple(chosen), sequence=candidate,
                 score=cand_score, delta=delta, accepted=accept, temperature=temp,
                 n_designed=res.n_designed, n_conflicts=len(res.conflicts),
                 mutations=mutations,
+                attribution={p: res.attribution.get(p, ())
+                             for p in changed if p in res.attribution},
+                rationale={p: why for p, why in
+                           ((p, _first_rationale(proposals, p)) for p in changed)
+                           if why},
             )
             trajectory.append(move)
             if verbose:
@@ -351,6 +409,14 @@ class Engine:
             breakdown_start=start, breakdown_best=self.scorer.score(best_ctx, best_seq),
             fingerprint=self.fingerprint,
         )
+
+
+def _first_rationale(proposals: list[Proposal], position: int) -> str:
+    """The reasoning attached to the first proposal touching ``position``."""
+    for p in proposals:
+        if p.resi == position:
+            return f"{p.strategy}: {p.rationale}"
+    return ""
 
 
 def _threaded(ctx: DesignContext, sequence: str):
