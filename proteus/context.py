@@ -67,6 +67,103 @@ class DesignContext:
     def chain_breaks(self) -> frozenset[int]:
         return frozenset(self.structure.chain_breaks())
 
+    # ------------------------------------------------- precomputed for scoring
+    #
+    # These depend only on the backbone, never on the sequence threaded onto
+    # it, so they are computed once per context and reused for every scoring
+    # call. Without this the aggregation term is O(n^2) in Python on every
+    # evaluation, which puts real proteins out of reach.
+
+    @cached_property
+    def layer_index(self) -> np.ndarray:
+        """0 = core, 1 = boundary, 2 = surface, as an array."""
+        order = {"core": 0, "boundary": 1, "surface": 2}
+        return np.array([order[l] for l in self.layers], dtype=np.int8)
+
+    @cached_property
+    def is_core(self) -> np.ndarray:
+        return self.layer_index == 0
+
+    @cached_property
+    def is_surface(self) -> np.ndarray:
+        return self.layer_index == 2
+
+    @cached_property
+    def is_helix(self) -> np.ndarray:
+        return np.array([c == "H" for c in self.ss])
+
+    @cached_property
+    def is_strand(self) -> np.ndarray:
+        return np.array([c == "E" for c in self.ss])
+
+    @cached_property
+    def in_lipid_core(self) -> np.ndarray:
+        return np.array([z == "lipid_core" for z in self.zones])
+
+    def patch_neighbors(self, radius: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Sparse neighbour list over aggregation-relevant positions.
+
+        Returns ``(env_idx, rows, cols)`` where ``env_idx`` maps subset indices
+        back to residue indices, and ``rows``/``cols`` enumerate pairs within
+        ``radius``.
+
+        A dense mask would make the aggregation term an O(n^2) matrix product
+        on every evaluation -- 120 ms for a 3000-residue protein, which is far
+        too slow for a loop that scores tens of thousands of candidates. With
+        an 8 A cutoff the true neighbour graph is very sparse, so the pair list
+        is built once per structure and each evaluation costs O(pairs).
+        """
+        key = ("patch_neighbors", round(float(radius), 3))
+        cached = self._cache.get(key)
+        if cached is None:
+            env_idx = np.flatnonzero(self.aggregation_environment)
+            if env_idx.size == 0:
+                cached = (env_idx, np.empty(0, np.intp), np.empty(0, np.intp))
+            else:
+                sub = self.cb_dist[np.ix_(env_idx, env_idx)] <= radius
+                np.fill_diagonal(sub, False)
+                rows, cols = np.nonzero(sub)
+                cached = (env_idx, rows, cols)
+            self._cache[key] = cached
+        return cached
+
+    @cached_property
+    def cap_positions(self) -> tuple[np.ndarray, np.ndarray]:
+        """Boolean masks for helix N-cap and C-cap positions.
+
+        The N-cap is the residue immediately preceding a helix, whose sidechain
+        can satisfy the first backbone NH groups; the C-cap is the residue
+        following it. Both are real stabilization sites, and without them in
+        the objective the capping strategy is invisible to selection.
+        """
+        n_res = len(self.structure)
+        n_cap = np.zeros(n_res, dtype=bool)
+        c_cap = np.zeros(n_res, dtype=bool)
+        for start, end in self.ss_segments("H"):
+            if end - start + 1 < 5:
+                continue
+            if start - 1 >= 1:
+                n_cap[start - 2] = True
+            if end + 1 <= n_res:
+                c_cap[end] = True
+        return n_cap, c_cap
+
+    @cached_property
+    def is_loop(self) -> np.ndarray:
+        return np.array([c == "L" for c in self.ss])
+
+    @cached_property
+    def aggregation_environment(self) -> np.ndarray:
+        """Positions where an exposed hydrophobic is a liability.
+
+        Surface positions, except those facing lipid -- inside the bilayer an
+        exposed hydrophobic is correct, not an aggregation risk.
+        """
+        env = self.is_surface.copy()
+        if self.is_membrane:
+            env &= ~self.in_lipid_core
+        return env
+
     # ------------------------------------------------------------ per-residue
 
     def layer(self, resi: int) -> str:

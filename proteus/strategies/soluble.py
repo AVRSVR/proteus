@@ -9,7 +9,7 @@ import numpy as np
 from ..context import DesignContext
 from ..geometry import dihedrals
 from ..proposals import AROMATIC, HYDROPHOBIC, NEGATIVE, POSITIVE, Proposal
-from .base import MEMBRANE, SOLUBLE, Strategy, register
+from .base import MEMBRANE, SOLUBLE, PairStrategy, Strategy, register
 
 # Residues too small to fill a core position well.
 UNDERSIZED = frozenset("AGSCT")
@@ -26,9 +26,25 @@ SS_CB_MIN, SS_CB_MAX = 3.0, 4.5
 SS_CA_MIN, SS_CA_MAX = 4.0, 6.5
 SS_MIN_SEQSEP = 4
 
-# Salt-bridge reach: CB-CB range over which two charged sidechains can pair.
-SB_CB_MIN, SB_CB_MAX = 4.0, 8.0
+# Salt-bridge geometry.
+#
+# Distance between CB atoms alone is far too permissive -- on a typical fold
+# nearly every adjacent surface pair falls inside any reasonable window, which
+# flagged 90-95% of all residues and told the selector nothing.
+#
+# Requiring the two CA->CB vectors to point at each other is also wrong, and
+# fails in the opposite direction: for two surface residues on a helix face,
+# both vectors point outward from the backbone and are close to parallel, so
+# that test rejected every real pair. The bridge is not made by the CB atoms,
+# it is made by sidechains reaching laterally.
+#
+# So the criterion models the reach: project a notional charged tip out from
+# each CB along its sidechain direction and require the two tips to land within
+# hydrogen-bonding range of one another.
+SB_CB_MIN, SB_CB_MAX = 4.0, 9.0
 SB_MIN_SEQSEP = 3
+SB_TIP_REACH = 3.0        # CB to charged group, averaged over Asp/Glu/Lys/Arg
+SB_TIP_MAX = 5.0          # tip-tip distance admitting a salt bridge
 
 
 @register
@@ -59,22 +75,63 @@ class CorePacking(Strategy):
 @register
 class CavityFill(Strategy):
     name = "cavity_fill"
-    mechanism = ("Close packing defects. Positions that sit in the core but "
-                 "have unusually few neighbours for their layer indicate a "
-                 "cavity; aromatics are the largest way to fill one.")
+    mechanism = ("Close packing defects. Deeply buried positions whose local "
+                 "neighbourhood carries less sidechain volume than the core "
+                 "average indicate a void; aromatics are the largest thing "
+                 "available to fill one.")
     applies_to = frozenset({SOLUBLE})
     conflicts_with = frozenset({"core_packing"})
 
+    #: Only fire this far above the core threshold. Marginally-buried
+    #: positions are boundary-like, and putting a bulky aromatic there
+    #: exposes ring surface and costs more in aggregation than it gains in
+    #: packing -- the original version targeted exactly those positions and
+    #: made the score consistently worse.
+    DEPTH_MARGIN = 1.0
+    VOLUME_RADIUS = 8.0
+
+    def _volume_deficit(self, ctx: DesignContext) -> dict[int, float]:
+        """Local sidechain volume relative to the core average.
+
+        A genuine cavity is not "few neighbours" -- it is neighbours that do
+        not fill the space they enclose. Summing neighbour volume in a shell
+        distinguishes the two.
+        """
+        from ..scoring import VOLUME
+
+        core = [p for p in ctx.positions
+                if ctx.burial(p) >= ctx.core_cutoff + self.DEPTH_MARGIN]
+        if len(core) < 3:
+            return {}
+
+        local: dict[int, float] = {}
+        for p in core:
+            row = ctx.cb_dist[p - 1]
+            local[p] = sum(VOLUME.get(ctx.aa(q), 130.0)
+                           for q in ctx.positions
+                           if q != p and row[q - 1] <= self.VOLUME_RADIUS)
+
+        values = sorted(local.values())
+        median = values[len(values) // 2]
+        return {p: median - v for p, v in local.items() if v < median}
+
     def diagnose(self, ctx: DesignContext) -> list[int]:
-        # Marginally-core positions: buried enough to matter, loosely packed.
-        lo, hi = ctx.core_cutoff, ctx.core_cutoff + 1.5
-        return [p for p in ctx.designable
-                if lo <= ctx.burial(p) < hi and ctx.aa(p) not in AROMATIC]
+        return [p for p in self._volume_deficit(ctx)
+                if p in ctx.designable and ctx.aa(p) not in AROMATIC]
 
     def propose(self, ctx, positions, rng):
-        return [Proposal(p, AROMATIC, self.name,
-                         f"loosely packed core position (neighbors {ctx.burial(p):.1f})")
-                for p in positions]
+        deficit = self._volume_deficit(ctx)
+        out = []
+        for p in positions:
+            # Tryptophan only where burial is deep enough to bury the whole
+            # ring; otherwise the aromatic surface becomes an exposed patch.
+            allowed = AROMATIC if ctx.burial(p) >= ctx.core_cutoff + 2.0 else frozenset("FY")
+            out.append(Proposal(
+                p, allowed, self.name,
+                f"buried (neighbors {ctx.burial(p):.1f}) with a local volume "
+                f"deficit of {deficit.get(p, 0.0):.0f} A^3",
+            ))
+        return out
 
 
 @register
@@ -106,7 +163,7 @@ class SurfaceDepolarize(Strategy):
 
 
 @register
-class SaltBridge(Strategy):
+class SaltBridge(PairStrategy):
     name = "salt_bridge"
     mechanism = ("Add favourable electrostatics. Pairs of surface positions "
                  "whose sidechains can reach each other are given "
@@ -114,11 +171,25 @@ class SaltBridge(Strategy):
                  "use most heavily.")
     applies_to = frozenset({SOLUBLE, MEMBRANE})
 
-    def _pairs(self, ctx: DesignContext) -> list[tuple[int, int]]:
-        cb, ca = ctx.cb_dist, ctx.ca_dist
+    def candidate_pairs(self, ctx: DesignContext) -> list[tuple[int, int]]:
+        """Surface pairs whose charged groups could reach each other.
+
+        Selectivity comes from the tip-reach test rather than from CB-CB
+        distance; see the geometry constants above for why. Pairs that already
+        carry complementary charges are skipped -- that bridge exists.
+        """
+        cb = ctx.cb_dist
+        coords_cb = ctx.structure.coords("cb")
+        coords_ca = ctx.structure.coords("ca")
+
+        direction = coords_cb - coords_ca
+        norms = np.linalg.norm(direction, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        tips = coords_cb + SB_TIP_REACH * (direction / norms)
+
+        # Charged residues need solvation, so restrict to genuine surface.
+        eligible = [p for p in ctx.designable if ctx.layer(p) == "surface"]
         cand = []
-        eligible = [p for p in ctx.designable
-                    if ctx.layer(p) in ("surface", "boundary")]
         for a_idx, i in enumerate(eligible):
             for j in eligible[a_idx + 1:]:
                 if abs(i - j) < SB_MIN_SEQSEP:
@@ -129,26 +200,23 @@ class SaltBridge(Strategy):
                 if ctx.ss_at(i) == "H" and ctx.ss_at(j) == "H":
                     if abs(i - j) not in (3, 4):
                         continue
-                if ca[i - 1, j - 1] > 12.0:
+                # Can the two charged groups actually reach each other?
+                if float(np.linalg.norm(tips[i - 1] - tips[j - 1])) > SB_TIP_MAX:
+                    continue
+                # Skip pairs that already form a complementary bridge.
+                residues = {ctx.aa(i), ctx.aa(j)}
+                if residues & NEGATIVE and residues & POSITIVE:
                     continue
                 cand.append((i, j))
         return cand
 
-    def diagnose(self, ctx: DesignContext) -> list[int]:
-        return sorted({x for pair in self._pairs(ctx) for x in pair})
-
     def propose(self, ctx, positions, rng):
-        pairs = [pr for pr in self._pairs(ctx)
-                 if pr[0] in positions or pr[1] in positions]
+        pairs = self.candidate_pairs(ctx)
         if not pairs:
             return []
         rng.shuffle(pairs)
-        used: set[int] = set()
         out = []
-        for i, j in pairs:
-            if i in used or j in used:
-                continue
-            used |= {i, j}
+        for i, j in self.select_pairs(pairs):
             d = ctx.cb_dist[i - 1, j - 1]
             # Weighted above 1.0: a pair is only meaningful if both halves land.
             out.append(Proposal(i, NEGATIVE, self.name,
@@ -157,20 +225,33 @@ class SaltBridge(Strategy):
             out.append(Proposal(j, POSITIVE, self.name,
                                 f"CB-CB {d:.1f}A salt bridge with {ctx.label(i)}",
                                 weight=1.5))
-            if len(out) >= 6:
-                break
         return out
 
 
 @register
-class Disulfide(Strategy):
+class Disulfide(PairStrategy):
     name = "disulfide"
     mechanism = ("Cross-link the fold. A disulfide lowers the entropy of the "
                  "unfolded state, which is why secreted proteins rely on them "
                  "-- but only where the geometry genuinely supports one.")
     applies_to = frozenset({SOLUBLE})
 
-    def _pairs(self, ctx: DesignContext) -> list[tuple[int, int]]:
+    def _existing(self, ctx: DesignContext) -> set[int]:
+        """Positions already participating in a disulfide.
+
+        A cysteine pair that already satisfies the geometry is a bond that
+        exists. Proposing to "add" it again wastes budget and, on a
+        disulfide-rich protein such as gp120, dominates the candidate list.
+        """
+        cys = [p for p in ctx.positions if ctx.aa(p) == "C"]
+        bonded = set()
+        for a_idx, i in enumerate(cys):
+            for j in cys[a_idx + 1:]:
+                if SS_CB_MIN <= ctx.cb_dist[i - 1, j - 1] <= SS_CB_MAX:
+                    bonded.update((i, j))
+        return bonded
+
+    def candidate_pairs(self, ctx: DesignContext) -> list[tuple[int, int]]:
         """Position pairs whose backbone geometry can actually host an SS bond.
 
         The prototype picked two random surface residues and mutated both to
@@ -179,8 +260,9 @@ class Disulfide(Strategy):
         liability -- rather than a crosslink. Here the geometry is the filter.
         """
         cb, ca = ctx.cb_dist, ctx.ca_dist
+        existing = self._existing(ctx)
         out = []
-        pos = ctx.designable
+        pos = [p for p in ctx.designable if p not in existing]
         for a_idx, i in enumerate(pos):
             for j in pos[a_idx + 1:]:
                 if abs(i - j) < SS_MIN_SEQSEP:
@@ -192,20 +274,19 @@ class Disulfide(Strategy):
                 out.append((i, j))
         return out
 
-    def diagnose(self, ctx: DesignContext) -> list[int]:
-        return sorted({x for pair in self._pairs(ctx) for x in pair})
-
     def propose(self, ctx, positions, rng):
-        pairs = self._pairs(ctx)
+        pairs = self.candidate_pairs(ctx)
         if not pairs:
             return []
         rng.shuffle(pairs)
-        i, j = pairs[0]
-        why = (f"CB-CB {ctx.cb_dist[i - 1, j - 1]:.1f}A, CA-CA "
-               f"{ctx.ca_dist[i - 1, j - 1]:.1f}A: disulfide geometry satisfied")
         cys = frozenset("C")
-        return [Proposal(i, cys, self.name, why, weight=2.0),
-                Proposal(j, cys, self.name, why, weight=2.0)]
+        out = []
+        for i, j in self.select_pairs(pairs):
+            why = (f"CB-CB {ctx.cb_dist[i - 1, j - 1]:.1f}A, CA-CA "
+                   f"{ctx.ca_dist[i - 1, j - 1]:.1f}A: disulfide geometry satisfied")
+            out.append(Proposal(i, cys, self.name, why, weight=2.0))
+            out.append(Proposal(j, cys, self.name, why, weight=2.0))
+        return out
 
 
 @register

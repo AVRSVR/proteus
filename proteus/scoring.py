@@ -80,6 +80,34 @@ AGGREGATION = {
 }
 
 
+def _byte_table(mapping: dict[str, float], default: float = 0.0,
+                transform=None) -> np.ndarray:
+    """Build a 256-entry array indexed by ASCII byte.
+
+    Scoring is called tens of thousands of times per run, so per-residue table
+    lookups are done by indexing a flat array with the encoded sequence rather
+    than by dict access in a Python loop.
+    """
+    table = np.full(256, default, dtype=np.float64)
+    for aa, value in mapping.items():
+        if len(aa) == 1:
+            table[ord(aa)] = transform(value) if transform else value
+    return table
+
+
+_LOOKUP = {
+    "hydropathy": _byte_table(HYDROPATHY),
+    "volume": _byte_table(VOLUME, default=130.0),
+    "aggregation": _byte_table(AGGREGATION),
+    "charge": _byte_table(CHARGE),
+    # Propensities are consumed as logs, so the log is taken once here.
+    "helix": _byte_table(HELIX_PROP, default=0.0,
+                         transform=lambda v: float(np.log(max(v, 0.1)))),
+    "sheet": _byte_table(SHEET_PROP, default=0.0,
+                         transform=lambda v: float(np.log(max(v, 0.1)))),
+}
+
+
 @dataclass
 class ScoreBreakdown:
     """Per-term decomposition, so a score can be argued with."""
@@ -136,6 +164,15 @@ class HeuristicScorer(Scorer):
                      hydrophobic.
     ``net_charge``   penalises extreme net charge, which otherwise runs away
                      when surface strategies pile on charged residues.
+    ``bb_entropy``   glycine costs unfolded-state entropy, proline in loops
+                     recovers it.
+    ``capping``      rewards satisfied helix N- and C-caps.
+
+    The last two exist because of a systematic bias found during auditing: a
+    mechanism the objective cannot measure will always lose on the leaderboard
+    regardless of its merit. Loop rigidification and helix capping both scored
+    exactly 0.00000 before these terms existed, so selection could never learn
+    anything about them.
     """
 
     name = "heuristic"
@@ -146,94 +183,120 @@ class HeuristicScorer(Scorer):
     W_SS = 0.8
     W_AGGREGATION = 1.2
     W_CHARGE = 0.5
+    W_BB_ENTROPY = 0.5
+    W_CAPPING = 0.4
 
     IDEAL_CORE_VOLUME = 165.0        # roughly leucine
     PATCH_RADIUS = 8.0
+
+    # Backbone conformational entropy, in arbitrary units consistent with the
+    # other terms. Glycine is the most flexible residue and pays for it in the
+    # unfolded state; proline is the most restricted and is rewarded, but only
+    # in loops -- inside a helix or strand it is a breaker and the propensity
+    # term penalises it there.
+    GLY_ENTROPY_COST = 1.0
+    PRO_LOOP_BONUS = 0.8
+
+    N_CAP_GOOD = frozenset("STDN")
+    C_CAP_GOOD = frozenset("GN")
 
     def score(self, ctx: DesignContext, sequence: str) -> ScoreBreakdown:
         if len(sequence) != len(ctx):
             raise ValueError(f"sequence length {len(sequence)} != {len(ctx)} residues")
 
+        # One pass over the sequence produces every property vector the terms
+        # need; the terms themselves are then pure array arithmetic.
+        idx = np.frombuffer(sequence.encode("ascii"), dtype=np.uint8)
+        hydro = _LOOKUP["hydropathy"][idx]
+        volume = _LOOKUP["volume"][idx]
+        helix = _LOOKUP["helix"][idx]
+        sheet = _LOOKUP["sheet"][idx]
+        aggreg = _LOOKUP["aggregation"][idx]
+        charge = _LOOKUP["charge"][idx]
+
         terms = {
-            "burial": self._burial(ctx, sequence),
-            "packing": self._packing(ctx, sequence),
-            "ss_propensity": self._ss(ctx, sequence),
-            "aggregation": self._aggregation(ctx, sequence),
-            "net_charge": self._charge(sequence),
+            "burial": self._burial(ctx, hydro),
+            "packing": self._packing(ctx, volume),
+            "ss_propensity": self._ss(ctx, helix, sheet),
+            "aggregation": self._aggregation(ctx, aggreg),
+            "net_charge": self._charge(charge),
+            "bb_entropy": self._bb_entropy(ctx, idx),
+            "capping": self._capping(ctx, idx),
         }
-        return ScoreBreakdown(total=sum(terms.values()), terms=terms,
+        return ScoreBreakdown(total=float(sum(terms.values())), terms=terms,
                               n_residues=len(sequence))
 
     # ------------------------------------------------------------------ terms
 
-    def _burial(self, ctx: DesignContext, seq: str) -> float:
+    def _burial(self, ctx: DesignContext, hydro: np.ndarray) -> float:
         """Hydrophobicity should track the environment, whichever way it points."""
-        score = 0.0
-        for p in ctx.positions:
-            aa = seq[p - 1]
-            h = HYDROPATHY.get(aa, 0.0)
-            if ctx.is_membrane and ctx.zone(p) == "lipid_core":
-                # Inverted: lipid exposure wants hydrophobic, bundle interior
-                # tolerates (and uses) polar.
-                want = 1.0 if ctx.layer(p) == "surface" else -0.2
-            else:
-                # Soluble: buried wants hydrophobic, exposed wants polar.
-                want = {"core": 1.0, "boundary": 0.2, "surface": -0.6}[ctx.layer(p)]
-            score -= h * want
-        return self.W_BURIAL * score / max(len(seq), 1)
+        want = np.where(ctx.is_core, 1.0, np.where(ctx.is_surface, -0.6, 0.2))
+        if ctx.is_membrane:
+            # Inverted inside the bilayer: lipid exposure wants hydrophobic,
+            # the bundle interior tolerates (and uses) polar.
+            lipid = ctx.in_lipid_core
+            want = np.where(lipid, np.where(ctx.is_surface, 1.0, -0.2), want)
+        return self.W_BURIAL * float(-(hydro * want).sum()) / max(len(hydro), 1)
 
-    def _packing(self, ctx: DesignContext, seq: str) -> float:
-        core = [p for p in ctx.positions if ctx.layer(p) == "core"]
-        if not core:
+    def _packing(self, ctx: DesignContext, volume: np.ndarray) -> float:
+        core = ctx.is_core
+        if not core.any():
             return 0.0
-        dev = [abs(VOLUME.get(seq[p - 1], 130.0) - self.IDEAL_CORE_VOLUME) / 100.0
-               for p in core]
-        return self.W_PACKING * float(np.mean(dev))
+        dev = np.abs(volume[core] - self.IDEAL_CORE_VOLUME) / 100.0
+        return self.W_PACKING * float(dev.mean())
 
-    def _ss(self, ctx: DesignContext, seq: str) -> float:
-        score = 0.0
-        for p in ctx.positions:
-            aa, ss = seq[p - 1], ctx.ss_at(p)
-            if ss == "H":
-                score -= np.log(max(HELIX_PROP.get(aa, 1.0), 0.1))
-            elif ss == "E":
-                score -= np.log(max(SHEET_PROP.get(aa, 1.0), 0.1))
-        return self.W_SS * float(score) / max(len(seq), 1)
+    def _ss(self, ctx: DesignContext, helix: np.ndarray, sheet: np.ndarray) -> float:
+        score = -(helix[ctx.is_helix].sum() + sheet[ctx.is_strand].sum())
+        return self.W_SS * float(score) / max(len(helix), 1)
 
-    def _aggregation(self, ctx: DesignContext, seq: str) -> float:
-        """Contiguous exposed hydrophobic surface, in 3D not in sequence.
+    def _aggregation(self, ctx: DesignContext, aggreg: np.ndarray) -> float:
+        """Contiguous aggregation-prone surface, measured in 3D not in sequence.
 
         Aggregation nucleates on spatial patches, so neighbours are found by
-        distance rather than by sequence position. Inside the bilayer an
-        exposed hydrophobic is correct, not a liability, so the lipid-facing
-        zone is exempt.
+        distance rather than by sequence position. The neighbour mask depends
+        only on the backbone, so it is computed once per structure and this
+        term reduces to a matrix-vector product.
         """
-        exposed = [p for p in ctx.positions
-                   if ctx.layer(p) == "surface"
-                   and not (ctx.is_membrane and ctx.zone(p) == "lipid_core")]
-        if not exposed:
+        env_idx, rows, cols = ctx.patch_neighbors(self.PATCH_RADIUS)
+        n_env = env_idx.size
+        if n_env == 0:
             return 0.0
 
-        patch = 0.0
-        for p in exposed:
-            a = AGGREGATION.get(seq[p - 1], 0.0)
-            if a <= 0:
-                continue
-            row = ctx.cb_dist[p - 1]
-            # Neighbours contribute with sign: aggregation-prone residues add
-            # to the patch, charged gatekeepers subtract from it. A patch that
-            # is well policed by charges contributes nothing.
-            neigh = sum(
-                AGGREGATION.get(seq[q - 1], 0.0)
-                for q in exposed
-                if q != p and row[q - 1] <= self.PATCH_RADIUS
-            )
-            patch += a * max(neigh, 0.0)     # quadratic in local propensity
-        return self.W_AGGREGATION * patch / max(len(exposed), 1)
+        prop = aggreg[env_idx]
+        # Signed neighbourhood sum: aggregation-prone residues build the patch,
+        # charged gatekeepers subtract from it. A well-policed patch is free.
+        neighbourhood = np.bincount(rows, weights=prop[cols], minlength=n_env)
+        np.clip(neighbourhood, 0.0, None, out=neighbourhood)
+        seeds = np.where(prop > 0.0, prop, 0.0)
+        patch = float((seeds * neighbourhood).sum())
+        return self.W_AGGREGATION * patch / n_env
 
-    def _charge(self, seq: str) -> float:
-        net = sum(CHARGE.get(a, 0.0) for a in seq)
-        per_res = abs(net) / max(len(seq), 1)
+    def _bb_entropy(self, ctx: DesignContext, idx: np.ndarray) -> float:
+        """Unfolded-state backbone entropy.
+
+        Glycine samples far more backbone conformations than any other
+        residue, so every glycine raises the entropy of the unfolded state and
+        destabilises the fold. Proline does the reverse. Rigidifying a loop is
+        real stabilization and the objective has to be able to see it.
+        """
+        is_gly = idx == ord("G")
+        is_pro = idx == ord("P")
+        cost = self.GLY_ENTROPY_COST * float(is_gly.sum())
+        gain = self.PRO_LOOP_BONUS * float((is_pro & ctx.is_loop).sum())
+        return self.W_BB_ENTROPY * (cost - gain) / max(len(idx), 1)
+
+    def _capping(self, ctx: DesignContext, idx: np.ndarray) -> float:
+        """Reward satisfied helix N- and C-caps."""
+        n_cap, c_cap = ctx.cap_positions
+        if not (n_cap.any() or c_cap.any()):
+            return 0.0
+        good_n = np.isin(idx, [ord(a) for a in self.N_CAP_GOOD])
+        good_c = np.isin(idx, [ord(a) for a in self.C_CAP_GOOD])
+        satisfied = float((n_cap & good_n).sum() + (c_cap & good_c).sum())
+        return -self.W_CAPPING * satisfied / max(len(idx), 1)
+
+    def _charge(self, charge: np.ndarray) -> float:
+        per_res = abs(float(charge.sum())) / max(len(charge), 1)
         # Free up to ~0.05 |charge|/residue, quadratic beyond.
         excess = max(per_res - 0.05, 0.0)
         return self.W_CHARGE * (excess ** 2) * 100.0

@@ -78,13 +78,42 @@ class Strategy(ABC):
         return f"<Strategy {self.name}>"
 
 
-@dataclass(frozen=True)
-class PairProposal:
-    """Two positions that must change together (disulfides, salt bridges)."""
+class PairStrategy(Strategy):
+    """Base for mechanisms acting on *pairs* of positions.
 
-    i: int
-    j: int
-    rationale: str
+    Disulfides and salt bridges both install a two-residue feature, and both
+    need the same discipline: only report as diagnosed what the strategy will
+    actually act on. Reporting every position in every candidate pair badly
+    overstates applicability -- 82 sites for a strategy that then emitted a
+    single pair -- which tells the selector a mechanism is far more relevant
+    than it is, and corrupts the leaderboard it is supposed to inform.
+    """
+
+    #: Cap on features installed per move. Small on purpose: each one
+    #: constrains the fold, and applying many at once makes the accept/reject
+    #: signal uninterpretable.
+    MAX_PAIRS = 3
+
+    @abstractmethod
+    def candidate_pairs(self, ctx: DesignContext) -> list[tuple[int, int]]:
+        """Position pairs whose geometry can host this feature."""
+
+    def select_pairs(self, pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        """Greedily take non-overlapping pairs, up to the cap."""
+        chosen: list[tuple[int, int]] = []
+        used: set[int] = set()
+        for i, j in pairs:
+            if i in used or j in used:
+                continue
+            chosen.append((i, j))
+            used |= {i, j}
+            if len(chosen) >= self.MAX_PAIRS:
+                break
+        return chosen
+
+    def diagnose(self, ctx: DesignContext) -> list[int]:
+        pairs = self.select_pairs(self.candidate_pairs(ctx))
+        return sorted({x for pair in pairs for x in pair})
 
 
 class REGISTRY:

@@ -68,7 +68,7 @@ def test_disulfide_requires_real_geometry():
 def test_disulfide_pairs_satisfy_distance_criteria():
     ctx = soluble_ctx()
     strat = REGISTRY.get("disulfide")
-    for i, j in strat._pairs(ctx):
+    for i, j in strat.candidate_pairs(ctx):
         assert 3.0 <= ctx.cb_dist[i - 1, j - 1] <= 4.5
         assert 4.0 <= ctx.ca_dist[i - 1, j - 1] <= 6.5
         assert abs(i - j) >= 4
@@ -76,10 +76,41 @@ def test_disulfide_pairs_satisfy_distance_criteria():
 
 def test_disulfide_proposes_cysteine_in_pairs():
     ctx = soluble_ctx()
-    props = REGISTRY.get("disulfide").run(ctx, RNG)
+    strat = REGISTRY.get("disulfide")
+    props = strat.run(ctx, RNG)
     if props:                                   # only if geometry allows one
-        assert len(props) == 2
+        assert len(props) % 2 == 0
+        assert len(props) <= 2 * strat.MAX_PAIRS
         assert all(p.allowed == frozenset("C") for p in props)
+        # No position may appear in two different crosslinks.
+        assert len({p.resi for p in props}) == len(props)
+
+
+def test_existing_disulfides_are_not_reproposed():
+    """A satisfied cysteine pair is a bond that exists, not a candidate."""
+    import numpy as np
+    from proteus.structure import from_arrays
+    ctx = soluble_ctx()
+    strat = REGISTRY.get("disulfide")
+    pairs = strat.candidate_pairs(ctx)
+    if not pairs:
+        return
+    i, j = pairs[0]
+    seq = list(ctx.structure.sequence)
+    seq[i - 1] = seq[j - 1] = "C"
+    st = from_arrays("".join(seq), ca=ctx.structure.coords("ca"),
+                     cb=ctx.structure.coords("cb"), n=ctx.structure.coords("n"),
+                     c=ctx.structure.coords("c"))
+    after = DesignContext(structure=st)
+    assert (i, j) not in REGISTRY.get("disulfide").candidate_pairs(after)
+
+
+def test_pair_strategies_only_report_what_they_will_do():
+    """Diagnosis must not overstate applicability to the selector."""
+    ctx = soluble_ctx()
+    for name in ("disulfide", "salt_bridge"):
+        strat = REGISTRY.get(name)
+        assert len(strat.diagnose(ctx)) <= 2 * strat.MAX_PAIRS
 
 
 def test_proline_only_where_phi_permits():
@@ -113,10 +144,19 @@ def test_positive_phi_glycine_is_protected():
 
 
 def test_salt_bridge_pairs_are_within_reach():
+    from proteus.strategies import soluble as sol
     ctx = soluble_ctx()
-    for i, j in REGISTRY.get("salt_bridge")._pairs(ctx):
-        assert 4.0 <= ctx.cb_dist[i - 1, j - 1] <= 8.0
-        assert abs(i - j) >= 3
+    for i, j in REGISTRY.get("salt_bridge").candidate_pairs(ctx):
+        assert sol.SB_CB_MIN <= ctx.cb_dist[i - 1, j - 1] <= sol.SB_CB_MAX
+        assert abs(i - j) >= sol.SB_MIN_SEQSEP
+        assert ctx.layer(i) == "surface" and ctx.layer(j) == "surface"
+
+
+def test_salt_bridge_diagnosis_is_selective():
+    """Distance alone flagged 90-95% of residues, which told selection nothing."""
+    ctx = soluble_ctx()
+    sites = REGISTRY.get("salt_bridge").diagnose(ctx)
+    assert len(sites) < 0.3 * len(ctx)
 
 
 def test_salt_bridge_proposes_complementary_charges():
