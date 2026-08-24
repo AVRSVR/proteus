@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proteus-stab"
+version = "0.1.0"
+description = "A strategy library for stabilizing designed proteins, soluble and membrane-embedded."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Anant Rao" }]
+keywords = ["protein-design", "protein-stability", "membrane-proteins", "rosetta"]
+
+dependencies = [
+    "numpy>=1.24",
+    "biopython>=1.81",
+]
+
+[project.optional-dependencies]
+rosetta = []          # pyrosetta is licence-gated; install separately
+md = ["openmm>=8.0", "pdbfixer>=1.9"]
+dev = ["pytest>=7.4", "pytest-cov"]
+
+[project.scripts]
+proteus = "proteus.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["proteus*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
