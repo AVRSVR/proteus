@@ -28,13 +28,34 @@ On the test structures these two signals correlate at |r| < 0.5, which is the pr
 
 ---
 
-## Install
+## Running it
+
+Proteus splits into a cheap half and an expensive half, and they belong in different places.
+
+**The loop runs anywhere.** Core dependencies are `numpy` and `biopython` only.
 
 ```bash
 pip install -e ".[dev]"
+proteus analyze design.pdb
+proteus run design.pdb --freeze 1-10,47-53 --explain
 ```
 
-Core requirements are `numpy` and `biopython` only. PyRosetta and OpenMM are optional extras — the library, its tests, and the built-in scorer all run without them, so the whole thing is reproducible without a licensed install.
+**The verification runs on Kaggle.** Both heavy backends need a host this repo's author did not have:
+
+| backend | requirement | why not locally |
+| --- | --- | --- |
+| PyRosetta | Linux | **no Windows wheel exists** — `pyrosetta-installer` aborts outright |
+| ESMFold | ~16 GB RAM, ideally a GPU | `esmfold_v1` bundles ESM-2 3B; CPU inference takes minutes |
+
+[**`notebooks/proteus_kaggle.ipynb`**](notebooks/proteus_kaggle.ipynb) is the full pipeline end to end — diagnose, run the loop, explain every mutation, adjudicate with Rosetta, check the refold, accumulate knowledge. Kaggle provides Linux, memory and a free GPU.
+
+To get the package onto Kaggle, either install from your repo, or build a wheel and upload it as a Dataset:
+
+```bash
+python -m build --wheel     # 68 KB, no compiled extensions
+```
+
+WSL2 also works for the Rosetta half if your machine will start it — on the development machine the VM would not (`HCS_E_CONNECTION_TIMEOUT`), which is a virtualisation setting rather than anything Proteus controls.
 
 ---
 
@@ -201,27 +222,29 @@ Rosetta sits *after* the loop, not inside it. A FastRelax costs seconds to minut
 
 Freezing is applied in **both** the resfile (`NATRO`, controlling identity) and the MoveMap (controlling coordinates). Either alone is insufficient; the prototype set neither.
 
-### Platform reality
+### Why not a cheaper sequence-likelihood gate
 
-Both backends were attempted on a Windows 11 machine with 7.8 GB RAM and neither could run there. The blockers are environmental, not code:
+Protein language model likelihood is the obvious lightweight substitute for a refold check — it needs a far smaller model and no structure prediction. It was tested and rejected.
 
-| backend | blocker | workaround |
-| --- | --- | --- |
-| PyRosetta | **no Windows wheel** — `pyrosetta-installer` aborts with "Could not find PyRosetta wheel for 'windows'" | Linux, WSL2, or a Kaggle/Colab notebook — see [`examples/kaggle_refine.py`](examples/kaggle_refine.py) |
-| ESMFold | `esmfold_v1` bundles ESM-2 3B and needs roughly **16 GB RAM** on CPU | GPU runtime on Kaggle/Colab, or any machine with more memory |
+Scoring 2A3D, an experimentally validated de novo three-helix bundle, against a synthetic poly-Trp/Tyr repeat with ESM-2 650M:
 
-WSL2 is the natural escape hatch for PyRosetta, but on the test machine the VM itself would not start (`HCS_E_CONNECTION_TIMEOUT`), which is a Hyper-V/virtualisation setting rather than anything Proteus controls.
+| sequence | mean log-likelihood / residue |
+| --- | --- |
+| 2A3D (validated design) | −0.326 |
+| poly-WY junk | **−0.013** |
 
-The practical split: run the cheap loop anywhere, run the adjudication where a Linux host and real memory are available.
+The junk scores *better*. A repetitive sequence is trivially predictable — given `WWWWYYYY`, the next `W` is easy — so likelihood rewards low complexity. As a quality gate this would rank exactly the score-hacked aromatic designs Proteus exists to catch above a real one. (The measurement was a single-pass approximation rather than true masked pseudo-likelihood, but the direction is a documented failure mode and disqualifying either way.)
+
+Self-consistency needs structure, not sequence plausibility. There is no cheap version.
 
 ### Installing the optional backends
 
 ```bash
-pip install "transformers>=4.35" accelerate     # ESMFold, ~2.6 GB on first use
 pip install pyrosetta-installer && python -c "import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()"
+pip install "transformers>=4.35" accelerate     # ESMFold, ~2.6 GB on first use
 ```
 
-PyRosetta is free for academic use and licence-gated for commercial use; it is not on PyPI. ESMFold on CPU takes minutes per prediction, which is why it is a finalist gate rather than an in-loop filter.
+PyRosetta is free for academic use and licence-gated for commercial use; it is not on PyPI. Both are handled by the Kaggle notebook.
 
 ---
 
