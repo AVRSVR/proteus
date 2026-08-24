@@ -124,6 +124,22 @@ def cmd_run(args) -> int:
             for name, n in sorted(credit.items(), key=lambda kv: -kv[1]):
                 print(f"  {name:<26} {n}")
 
+    if args.refold:
+        from .validate import ESMFoldGate
+        print()
+        print("refold self-consistency check (ESMFold, this takes a while on CPU)...")
+        try:
+            gate = ESMFoldGate(rmsd_cutoff=args.refold_rmsd)
+            check = gate.check(result.best_sequence, ctx.structure)
+            print("  " + check.describe())
+            if not check.passed:
+                print("  the designed sequence does not refold to the intended "
+                      "backbone; treat the score improvement as unverified.")
+        except ImportError as exc:
+            print(f"  SKIPPED -- {exc}")
+            print("  the run is therefore UNVERIFIED: nothing has confirmed "
+                  "this sequence still folds to the input backbone.")
+
     if knowledge is not None:
         knowledge.save(args.knowledge)
         print(f"\nknowledge base now holds {len(knowledge)} observations "
@@ -164,6 +180,42 @@ def cmd_leaderboard(args) -> int:
             print(f"  {sim:.3f}  {name}")
         print()
     print(knowledge.report(print_fp, top=args.top))
+    return 0
+
+
+def cmd_refine(args) -> int:
+    """Hand a designed sequence to Rosetta for real packing and relax."""
+    from .backends import rosetta
+
+    if not rosetta.available():
+        # A missing optional dependency is a configuration problem, not a
+        # crash: report it as a message rather than a traceback.
+        try:
+            rosetta.require()
+        except ImportError as exc:
+            raise SystemExit(str(exc)) from None
+
+    ctx = build_context(args)
+    sequence = args.sequence
+    if args.fasta:
+        lines = [l.strip() for l in open(args.fasta) if not l.startswith(">")]
+        sequence = "".join(lines)
+    if not sequence:
+        raise SystemExit("provide a designed sequence with --sequence or --fasta")
+
+    resolution = rosetta.build_resolution_from_sequence(ctx, sequence)
+    print(f"{len(resolution.allowed)} positions differ from the input structure")
+    if not resolution.allowed:
+        print("nothing to do")
+        return 0
+
+    backend = rosetta.RosettaBackend(membrane=args.membrane)
+    print(f"energy function: {backend.weights}")
+    result = backend.refine(args.pdb, resolution, ctx.structure,
+                            frozen=ctx.frozen, out_pdb=args.out)
+    print(result.describe())
+    if args.out:
+        print(f"wrote {args.out}")
     return 0
 
 
@@ -208,11 +260,24 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--knowledge", metavar="PATH",
                        help="accumulate and reuse what works across runs; the "
                             "file is created if it does not exist")
+    p_run.add_argument("--refold", action="store_true",
+                       help="after the run, fold the best sequence with "
+                            "ESMFold and check it matches the input backbone")
+    p_run.add_argument("--refold-rmsd", type=float, default=2.0,
+                       metavar="A", help="scRMSD cutoff for --refold")
     p_run.add_argument("--explain", action="store_true",
                        help="print every changed position and the mechanism "
                             "that proposed it")
     p_run.add_argument("-q", "--quiet", action="store_true")
     p_run.set_defaults(func=cmd_run)
+
+    p_rf = sub.add_parser("refine",
+                          help="repack and relax a designed sequence with Rosetta")
+    add_common(p_rf)
+    p_rf.add_argument("--sequence", help="designed sequence, one letter per residue")
+    p_rf.add_argument("--fasta", help="read the designed sequence from a FASTA file")
+    p_rf.add_argument("--out", help="write the relaxed structure here")
+    p_rf.set_defaults(func=cmd_refine)
 
     p_st = sub.add_parser("strategies", help="list the strategy library")
     p_st.set_defaults(func=cmd_strategies)

@@ -167,19 +167,57 @@ Every strategy was run in isolation on a validated de novo design, a prototype o
 - **The membrane estimator needs a plausible starting sequence.** It locates the bilayer from exposed hydrophobicity. If the design under repair has that backwards — exactly the case Proteus exists to fix — the estimate is unreliable. Supply an OPM-oriented structure, or an explicit `MembraneModel`. There is a test asserting this failure mode rather than hiding it.
 - **Credit assignment is joint.** When two mechanisms are applied together and the result improves, both are rewarded. Raw per-arm history is retained so the ambiguity can be analysed.
 - **The knowledge base is only as good as the objective.** It faithfully learns which mechanisms improve `HeuristicScorer`. Whether that tracks real stability is exactly the open question, and is why the Rosetta backend and a refold gate matter more than more strategies.
-- **No refold check yet.** The single most valuable missing filter is threading the designed sequence back through a structure predictor and requiring self-consistency. Until that exists, nothing here verifies the sequence still encodes the fold.
+- **The refold check is optional and off by default.** Pass `--refold` to run it. A run without it has not been verified, and the output says so.
+- **The Rosetta path has not been executed against a live PyRosetta install.** It was written on a machine without one. Its testable parts — energy-function selection, resfile generation, frozen-set handling, the import-failure path — are covered, but the PyRosetta API calls themselves (`AddMembraneMover`, `FastRelax`, `PackRotamersMover`) have not been run. Expect to debug it the first time. The same applies to `ESMFoldGate.predict`: the gate logic and RMSD maths are tested against a fake predictor, the ESMFold tensor handling is not.
+
+---
+
+## Verification
+
+A score improvement is a claim about the objective, not about the protein. Two optional backends turn it into something checkable.
+
+**Refold self-consistency** — fold the designed sequence with ESMFold and measure how far it lands from the backbone the strategies were reasoning about. This is the check everything else is conditional on: without it, nothing confirms the sequence still encodes the fold.
+
+```bash
+proteus run design.pdb --refold --refold-rmsd 2.0
+```
+
+```
+refold self-consistency check (ESMFold, this takes a while on CPU)...
+  PASS  scRMSD 1.34 A, pLDDT 88.2  (refolds to the intended backbone)
+```
+
+Without the dependency installed the run says so explicitly rather than omitting the field — an unverified run is reported as unverified.
+
+Every RMSD is superposed with Kabsch first, including a determinant correction so a mirror image cannot pass. This is not incidental: computing deviation as a raw coordinate difference, as the earlier prototype's MD did, measures rigid-body tumbling rather than shape change. A correct structure rotated 30° scores over 5 Å that way. The test suite asserts rotation and translation invariance directly.
+
+**Rosetta refinement** — real packing, minimisation and energy on the finalist.
+
+```bash
+proteus refine design.pdb --fasta best.fasta --out relaxed.pdb
+```
+
+Rosetta sits *after* the loop, not inside it. A FastRelax costs seconds to minutes per call, so the cheap objective narrows the field and Rosetta answers whether the survivor is genuinely better. Membrane proteins are scored with `franklin2019` rather than `ref2015` — the latter applies soluble burial physics to a bilayer — and an implicit membrane is attached, without which the membrane terms have no geometry to act on and the function degrades quietly toward a soluble one.
+
+Freezing is applied in **both** the resfile (`NATRO`, controlling identity) and the MoveMap (controlling coordinates). Either alone is insufficient; the prototype set neither.
+
+### Installing the optional backends
+
+```bash
+pip install "transformers>=4.35" accelerate     # ESMFold, ~2.6 GB on first use
+pip install pyrosetta-installer && python -c "import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()"
+```
+
+PyRosetta is free for academic use and licence-gated for commercial use; it is not on PyPI. ESMFold on CPU takes minutes per prediction, which is why it is a finalist gate rather than an in-loop filter.
 
 ---
 
 ## Roadmap
 
-- Rosetta backend (`ref2015` for soluble, `franklin2019` for membrane) with real packing and relax
-- ESMFold refold self-consistency gate — the highest-value missing filter
-- OpenMM backend with **superposition-corrected** RMSD (unaligned RMSD measures tumbling, not deformation)
+- Engine operating directly on Rosetta poses, so packing happens inside the loop rather than only at refinement
 - Strategy interaction map: which mechanisms are synergistic, which interfere
-- Disentangling joint credit, so a mechanism is rewarded for its own contribution
-
----
+- Per-strategy credit assignment — currently joint when mechanisms are co-applied
+- Cross-protein transfer evaluated properly: does a prior from similar folds measurably beat a cold start?
 
 ## Tests
 
