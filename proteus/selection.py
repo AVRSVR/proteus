@@ -171,9 +171,104 @@ class Thompson(Policy):
         return self.rng.betavariate(a, b)
 
 
-def make_policy(name: str, arms: list[str], rng: random.Random | None = None) -> Policy:
-    policies = {"ucb1": UCB1, "thompson": Thompson}
+class PriorGuidedUCB(UCB1):
+    """UCB1 seeded with what worked on structurally similar proteins.
+
+    Priors enter as pseudo-observations rather than as a hard ranking: a
+    strategy that succeeded on near-identical folds starts with a head start
+    proportional to how similar those folds were, and that head start is washed
+    out by real evidence from the current run. That keeps transfer useful
+    without letting it override what this protein is actually telling us.
+
+    ``prior_strength`` scales the effective sample size of transferred
+    knowledge. At 1.0 a fully-similar prior is worth about one observation.
+    """
+
+    def __init__(self, arms, rng=None, c: float = 1.4,
+                 priors: dict[str, "object"] | None = None,
+                 prior_strength: float = 2.0) -> None:
+        super().__init__(arms, rng, c)
+        self.prior_strength = prior_strength
+        self.priors: dict[str, tuple[float, float]] = {}
+        for name, prior in (priors or {}).items():
+            mean = getattr(prior, "mean_reward", 0.0)
+            weight = getattr(prior, "weight", 0.0)
+            if weight > 0:
+                self.priors[name] = (float(mean), float(weight))
+
+    def _blended(self, arm: ArmStats) -> tuple[float, float]:
+        """Posterior mean and effective count, blending prior with evidence."""
+        prior = self.priors.get(arm.name)
+        if prior is None:
+            return arm.mean_reward, float(arm.pulls)
+        prior_mean, prior_weight = prior
+        n0 = min(prior_weight, 5.0) * self.prior_strength
+        total = n0 + arm.pulls
+        if total <= 0:
+            return prior_mean, 0.0
+        mean = (prior_mean * n0 + arm.total_reward) / total
+        return mean, total
+
+    def _priority(self, arm: ArmStats) -> float:
+        mean, effective = self._blended(arm)
+        if effective <= 0:
+            return math.inf
+        total = max(self.total_pulls, 1)
+        return mean + self.c * math.sqrt(math.log(total) / effective)
+
+    def select(self, available: list[str], k: int = 1) -> list[str]:
+        """Prefer arms with a prior over untried arms with none.
+
+        The base policy tries every untried arm first, which is right with no
+        information. Here some untried arms already have transferred evidence,
+        so they are ranked normally rather than being treated as unknowns.
+        """
+        pool = [a for a in available if a in self.stats]
+        if not pool:
+            return []
+        k = min(k, len(pool))
+        unknown = [a for a in pool
+                   if self.stats[a].pulls == 0 and a not in self.priors]
+        self.rng.shuffle(unknown)
+        chosen = unknown[:k]
+        if len(chosen) == k:
+            return chosen
+        ranked = sorted(
+            (a for a in pool if a not in chosen),
+            key=lambda a: self._priority(self.stats[a]),
+            reverse=True,
+        )
+        return chosen + ranked[: k - len(chosen)]
+
+    def table(self, top: int | None = None) -> str:
+        rows = self.leaderboard()
+        if top:
+            rows = rows[:top]
+        width = max((len(r.name) for r in rows), default=8)
+        header = f"{'strategy'.ljust(width)}  pulls  win%   mean reward   prior"
+        out = [header, "-" * len(header)]
+        for r in rows:
+            prior = self.priors.get(r.name)
+            tag = f"{prior[0]:+.3f}(w{prior[1]:.1f})" if prior else "-"
+            if r.pulls == 0:
+                out.append(f"{r.name.ljust(width)}      -     -             -  {tag}")
+            else:
+                out.append(f"{r.name.ljust(width)}  {r.pulls:5d}  "
+                           f"{100 * r.success_rate:4.0f}  {r.mean_reward:12.3f}  {tag}")
+        return "\n".join(out)
+
+
+def make_policy(name: str, arms: list[str], rng: random.Random | None = None,
+                priors: dict | None = None) -> Policy:
+    """Build a policy by name; passing priors upgrades UCB1 to prior-guided."""
     key = name.lower()
-    if key not in policies:
-        raise KeyError(f"unknown policy {name!r}; available: {sorted(policies)}")
-    return policies[key](arms, rng)
+    if key in ("ucb1", "prior", "prior_ucb"):
+        if priors:
+            return PriorGuidedUCB(arms, rng, priors=priors)
+        if key == "ucb1":
+            return UCB1(arms, rng)
+        return UCB1(arms, rng)
+    if key == "thompson":
+        return Thompson(arms, rng)
+    raise KeyError(f"unknown policy {name!r}; "
+                   f"available: ucb1, thompson, prior")

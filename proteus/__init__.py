@@ -11,6 +11,8 @@ is carried alongside burial everywhere rather than bolted on.
 """
 
 from .context import DesignContext
+from .fingerprint import Fingerprint
+from .knowledge import KnowledgeBase
 from .membrane import MembraneModel
 from .proposals import Proposal, Resolution, resolve, to_resfile
 from .strategies import REGISTRY, Strategy, register
@@ -20,6 +22,8 @@ __version__ = "0.1.0"
 
 __all__ = [
     "DesignContext",
+    "Fingerprint",
+    "KnowledgeBase",
     "MembraneModel",
     "Proposal",
     "Resolution",

@@ -66,6 +66,7 @@ class RunResult:
     policy: Policy | None = None
     breakdown_start: ScoreBreakdown | None = None
     breakdown_best: ScoreBreakdown | None = None
+    fingerprint: object | None = None
 
     @property
     def improvement(self) -> float:
@@ -153,9 +154,13 @@ class Engine:
         final_temperature: float | None = None,
         calibration_moves: int = 6,
         tabu_tenure: int = 4,
+        knowledge=None,
+        protein: str = "",
         seed: int | None = None,
     ) -> None:
         self.ctx = ctx
+        self.knowledge = knowledge
+        self.protein = protein
         self.scorer = scorer or HeuristicScorer()
         self.rng = random.Random(seed)
         self.k = strategies_per_move
@@ -173,7 +178,19 @@ class Engine:
         self._calibrated = temperature is not None
 
         available = [s.name for s in REGISTRY.for_context(ctx)]
-        self.policy = (make_policy(policy, available, self.rng)
+
+        # If a knowledge base is supplied, describe this protein and pull
+        # forward what worked on structurally similar ones. The prior is a
+        # head start, not a verdict -- evidence from this run washes it out.
+        self.fingerprint = None
+        priors = None
+        if knowledge is not None:
+            from .fingerprint import compute as compute_fingerprint
+
+            self.fingerprint = compute_fingerprint(ctx, self.scorer)
+            priors = knowledge.priors(self.fingerprint, available)
+
+        self.policy = (make_policy(policy, available, self.rng, priors=priors)
                        if isinstance(policy, str) else policy)
         for name in available:
             self.policy.add_arm(name)
@@ -319,6 +336,11 @@ class Engine:
             if patience is not None and since_improvement >= patience:
                 break
 
+        # Fold this run's evidence back into the shared memory, so the next
+        # protein starts from a better prior than this one did.
+        if self.knowledge is not None and self.fingerprint is not None:
+            self.knowledge.record_run(self.fingerprint, self.policy, self.protein)
+
         best_ctx = DesignContext(
             structure=_threaded(self.ctx, best_seq), frozen=self.ctx.frozen,
             membrane=self.ctx.membrane, dssp=self.ctx.ss,
@@ -327,6 +349,7 @@ class Engine:
             best_sequence=best_seq, best_score=best, start_score=start_per_res,
             trajectory=trajectory, policy=self.policy,
             breakdown_start=start, breakdown_best=self.scorer.score(best_ctx, best_seq),
+            fingerprint=self.fingerprint,
         )
 
 

@@ -72,15 +72,40 @@ def cmd_analyze(args) -> int:
 
 
 def cmd_run(args) -> int:
+    from pathlib import Path
+
+    from .knowledge import KnowledgeBase
+
     ctx = build_context(args)
     print(ctx.summary())
     print()
+
+    knowledge = None
+    if args.knowledge:
+        knowledge = KnowledgeBase.load(args.knowledge)
+        print(f"knowledge base: {len(knowledge)} observations from previous runs")
+
     engine = Engine(
         ctx,
         policy=args.policy,
         strategies_per_move=args.strategies_per_move,
+        knowledge=knowledge,
+        protein=Path(args.pdb).stem,
         seed=args.seed,
     )
+
+    if knowledge is not None and engine.fingerprint is not None:
+        print(f"this protein   : {engine.fingerprint.describe()}")
+        near = knowledge.neighbours(engine.fingerprint, k=3)
+        if near:
+            print("most similar seen before: " +
+                  ", ".join(f"{name} ({sim:.2f})" for sim, name in near))
+        if getattr(engine.policy, "priors", None):
+            print(f"transferred priors for {len(engine.policy.priors)} strategies")
+        else:
+            print("no comparable proteins yet; starting without priors")
+    print()
+
     result = engine.run(generations=args.generations, patience=args.patience,
                         verbose=not args.quiet)
     print()
@@ -89,12 +114,46 @@ def cmd_run(args) -> int:
     print("start:", ctx.structure.sequence)
     print("best :", result.best_sequence)
 
+    if knowledge is not None:
+        knowledge.save(args.knowledge)
+        print(f"\nknowledge base now holds {len(knowledge)} observations "
+              f"-> {args.knowledge}")
+
     if args.out:
         with open(args.out, "w") as fh:
             fh.write(f">{args.pdb}|proteus|improvement="
                      f"{result.improvement:+.4f}/residue\n")
             fh.write(result.best_sequence + "\n")
         print(f"\nwrote {args.out}")
+    return 0
+
+
+def cmd_leaderboard(args) -> int:
+    from .fingerprint import compute as compute_fingerprint
+    from .knowledge import KnowledgeBase
+
+    knowledge = KnowledgeBase.load(args.knowledge)
+    if not len(knowledge):
+        print(f"{args.knowledge}: no observations yet. Run 'proteus run "
+              f"--knowledge {args.knowledge}' on a few structures first.")
+        return 0
+
+    if not args.target:
+        print(knowledge.report(top=args.top))
+        return 0
+
+    structure = from_pdb(args.target, chain=args.chain)
+    mem = membrane_mod.estimate(structure) if args.membrane else None
+    ctx = DesignContext(structure=structure, membrane=mem)
+    print_fp = compute_fingerprint(ctx)
+
+    near = knowledge.neighbours(print_fp, k=5)
+    if near:
+        print("most similar proteins seen before:")
+        for sim, name in near:
+            print(f"  {sim:.3f}  {name}")
+        print()
+    print(knowledge.report(print_fp, top=args.top))
     return 0
 
 
@@ -136,11 +195,24 @@ def main(argv: list[str] | None = None) -> int:
                        help="stop after this many generations without improvement")
     p_run.add_argument("--seed", type=int, default=0)
     p_run.add_argument("--out", help="write the best sequence to this FASTA file")
+    p_run.add_argument("--knowledge", metavar="PATH",
+                       help="accumulate and reuse what works across runs; the "
+                            "file is created if it does not exist")
     p_run.add_argument("-q", "--quiet", action="store_true")
     p_run.set_defaults(func=cmd_run)
 
     p_st = sub.add_parser("strategies", help="list the strategy library")
     p_st.set_defaults(func=cmd_strategies)
+
+    p_lb = sub.add_parser("leaderboard",
+                          help="what has worked, optionally for a given protein")
+    p_lb.add_argument("knowledge", help="knowledge base file")
+    p_lb.add_argument("--for", dest="target", metavar="PDB",
+                      help="condition the leaderboard on this structure")
+    p_lb.add_argument("--chain")
+    p_lb.add_argument("--membrane", action="store_true")
+    p_lb.add_argument("--top", type=int, default=None)
+    p_lb.set_defaults(func=cmd_leaderboard)
 
     args = parser.parse_args(argv)
     return args.func(args)
