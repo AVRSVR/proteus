@@ -84,6 +84,32 @@ def test_membrane_inverts_the_burial_term():
     assert hydrophobic < charged
 
 
+def test_aromatic_surface_is_flagged_as_aggregation_prone():
+    """Aggregation is not scored on a hydropathy scale.
+
+    Kyte-Doolittle rates Trp and Tyr as hydrophilic because they are
+    amphipathic, so scoring aggregation with it gave a tryptophan-covered
+    surface a free pass -- precisely the degenerate corner a greedy optimizer
+    finds. Aromatics must rank as aggregation-prone, and charged residues must
+    act as gatekeepers.
+    """
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    scorer = HeuristicScorer()
+    surface = [p for p in ctx.positions if ctx.layer(p) == "surface"]
+
+    def surface_agg(aa):
+        seq = list(st.sequence)
+        for p in surface:
+            seq[p - 1] = aa
+        return scorer.score(ctx, "".join(seq)).terms["aggregation"]
+
+    for aromatic in "WYF":
+        assert surface_agg(aromatic) > 1.0, f"{aromatic} surface not flagged"
+    for gatekeeper in "KED":
+        assert surface_agg(gatekeeper) == pytest.approx(0.0, abs=1e-9)
+
+
 def test_net_charge_term_punishes_runaway_charge():
     st = poor_bundle()
     ctx = DesignContext(structure=st)

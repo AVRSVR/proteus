@@ -59,6 +59,26 @@ SHEET_PROP = {
 
 CHARGE = {"D": -1.0, "E": -1.0, "K": 1.0, "R": 1.0, "H": 0.1}
 
+# Aggregation propensity, which is *not* the same axis as hydropathy.
+#
+# Kyte-Doolittle measures membrane-insertion free energy and rates tryptophan
+# and tyrosine as hydrophilic, because they are amphipathic: a bulky nonpolar
+# ring carrying a polar group. For aggregation the aromatics are among the
+# worst offenders -- aromatic stacking is a principal driver of amyloid, and
+# experimental scales (Aggrescan, TANGO) rank them at the top. Scoring
+# aggregation on a hydropathy scale therefore gives a protein with a
+# tryptophan-covered surface a free pass, which is exactly the failure mode
+# a greedy optimizer will find and exploit.
+#
+# Charged residues take negative values: they act as gatekeepers, actively
+# suppressing aggregation of the patch around them.
+AGGREGATION = {
+    "I": 1.00, "F": 1.00, "W": 0.95, "L": 0.94, "V": 0.90, "Y": 0.82,
+    "M": 0.70, "C": 0.60, "A": 0.32, "T": 0.24, "G": 0.15, "S": 0.14,
+    "H": 0.10, "Q": 0.08, "N": 0.06, "P": -0.10, "R": -0.45, "K": -0.55,
+    "E": -0.60, "D": -0.60, "X": 0.0,
+}
+
 
 @dataclass
 class ScoreBreakdown:
@@ -196,16 +216,19 @@ class HeuristicScorer(Scorer):
 
         patch = 0.0
         for p in exposed:
-            h = HYDROPATHY.get(seq[p - 1], 0.0)
-            if h <= 0:
+            a = AGGREGATION.get(seq[p - 1], 0.0)
+            if a <= 0:
                 continue
             row = ctx.cb_dist[p - 1]
+            # Neighbours contribute with sign: aggregation-prone residues add
+            # to the patch, charged gatekeepers subtract from it. A patch that
+            # is well policed by charges contributes nothing.
             neigh = sum(
-                max(HYDROPATHY.get(seq[q - 1], 0.0), 0.0)
+                AGGREGATION.get(seq[q - 1], 0.0)
                 for q in exposed
                 if q != p and row[q - 1] <= self.PATCH_RADIUS
             )
-            patch += h * neigh          # quadratic in local hydrophobicity
+            patch += a * max(neigh, 0.0)     # quadratic in local propensity
         return self.W_AGGREGATION * patch / max(len(exposed), 1)
 
     def _charge(self, seq: str) -> float:
