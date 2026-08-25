@@ -89,6 +89,8 @@ def cmd_run(args) -> int:
         ctx,
         policy=args.policy,
         strategies_per_move=args.strategies_per_move,
+        mutation_budget=args.mutation_budget,
+        mutation_cost=args.mutation_cost,
         knowledge=knowledge,
         protein=Path(args.pdb).stem,
         seed=args.seed,
@@ -167,6 +169,32 @@ def cmd_leaderboard(args) -> int:
     return 0
 
 
+def cmd_validate(args) -> int:
+    """Check a designed sequence refolds to the backbone it was designed on."""
+    from .validate import PredictedStructureGate
+    from .structure import from_pdb as _from_pdb
+
+    reference = _from_pdb(args.pdb, chain=args.chain)
+    predicted = _from_pdb(args.predicted, chain=args.predicted_chain)
+
+    if len(predicted) != len(reference):
+        raise SystemExit(
+            f"length mismatch: reference has {len(reference)} residues, "
+            f"prediction has {len(predicted)}. They must correspond "
+            f"position-for-position."
+        )
+
+    gate = PredictedStructureGate(predicted, rmsd_cutoff=args.rmsd,
+                                  plddt_cutoff=args.plddt)
+    result = gate.check(predicted.sequence, reference)
+    print(result.describe())
+    if not result.passed:
+        print("the designed sequence does not refold to the intended backbone; "
+              "treat any score improvement as unverified.")
+        return 1
+    return 0
+
+
 def cmd_strategies(args) -> int:
     for s in REGISTRY.all():
         envs = ", ".join(sorted(s.applies_to))
@@ -203,6 +231,13 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--strategies-per-move", type=int, default=2)
     p_run.add_argument("--patience", type=int, default=None,
                        help="stop after this many generations without improvement")
+    p_run.add_argument("--mutation-budget", type=float, default=0.15,
+                       metavar="FRAC",
+                       help="hard ceiling on mutations as a fraction of "
+                            "designable positions (default 0.15)")
+    p_run.add_argument("--mutation-cost", type=float, default=0.10,
+                       help="price per mutation, so a change must earn its "
+                            "place rather than merely not hurt")
     p_run.add_argument("--seed", type=int, default=0)
     p_run.add_argument("--out", help="write the best sequence to this FASTA file")
     p_run.add_argument("--knowledge", metavar="PATH",
@@ -213,6 +248,21 @@ def main(argv: list[str] | None = None) -> int:
                             "that proposed it")
     p_run.add_argument("-q", "--quiet", action="store_true")
     p_run.set_defaults(func=cmd_run)
+
+    p_val = sub.add_parser(
+        "validate",
+        help="check a predicted structure matches the design backbone")
+    p_val.add_argument("pdb", help="the design's backbone (reference)")
+    p_val.add_argument("--chain", help="chain of the reference")
+    p_val.add_argument("--predicted", required=True,
+                       help="structure predicted from the designed sequence, "
+                            "folded with ESMFold, AlphaFold or anything else")
+    p_val.add_argument("--predicted-chain", help="chain of the prediction")
+    p_val.add_argument("--rmsd", type=float, default=2.0,
+                       help="scRMSD cutoff in angstrom (default 2.0)")
+    p_val.add_argument("--plddt", type=float, default=80.0,
+                       help="pLDDT cutoff, read from the B-factor column")
+    p_val.set_defaults(func=cmd_validate)
 
     p_st = sub.add_parser("strategies", help="list the strategy library")
     p_st.set_defaults(func=cmd_strategies)

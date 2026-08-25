@@ -43,8 +43,14 @@ SS_MIN_SEQSEP = 4
 # hydrogen-bonding range of one another.
 SB_CB_MIN, SB_CB_MAX = 4.0, 9.0
 SB_MIN_SEQSEP = 3
-SB_TIP_REACH = 3.0        # CB to charged group, averaged over Asp/Glu/Lys/Arg
-SB_TIP_MAX = 5.0          # tip-tip distance admitting a salt bridge
+# Reach from CB to the charged group differs sharply by residue, so a single
+# averaged value is wrong in both directions. Asp reaches about 2.5 A and Glu
+# about 3.9; Lys about 5.0 and Arg about 5.5. Modelling the acid and the base
+# separately, and trying both role assignments for a pair, is the difference
+# between rejecting a viable Glu-Arg bridge and inventing an Asp-Asp one.
+SB_ACID_REACH = 3.2       # CB -> carboxylate, averaged over Asp/Glu
+SB_BASE_REACH = 5.2       # CB -> ammonium/guanidinium, averaged over Lys/Arg
+SB_TIP_MAX = 4.0          # charged-group separation admitting a salt bridge
 
 
 @register
@@ -185,7 +191,15 @@ class SaltBridge(PairStrategy):
         direction = coords_cb - coords_ca
         norms = np.linalg.norm(direction, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
-        tips = coords_cb + SB_TIP_REACH * (direction / norms)
+        unit = direction / norms
+        acid_tip = coords_cb + SB_ACID_REACH * unit
+        base_tip = coords_cb + SB_BASE_REACH * unit
+
+        def reachable(i: int, j: int) -> bool:
+            """Can these two host a bridge in either role assignment?"""
+            a = np.linalg.norm(acid_tip[i - 1] - base_tip[j - 1])
+            b = np.linalg.norm(base_tip[i - 1] - acid_tip[j - 1])
+            return bool(min(a, b) <= SB_TIP_MAX)
 
         # Charged residues need solvation, so restrict to genuine surface.
         eligible = [p for p in ctx.designable if ctx.layer(p) == "surface"]
@@ -201,7 +215,7 @@ class SaltBridge(PairStrategy):
                     if abs(i - j) not in (3, 4):
                         continue
                 # Can the two charged groups actually reach each other?
-                if float(np.linalg.norm(tips[i - 1] - tips[j - 1])) > SB_TIP_MAX:
+                if not reachable(i, j):
                     continue
                 # Skip pairs that already form a complementary bridge.
                 residues = {ctx.aa(i), ctx.aa(j)}
@@ -389,19 +403,43 @@ class LoopRigidify(Strategy):
         return out
 
 
+def _poor_formers(table: dict[str, float], threshold: float) -> frozenset[str]:
+    """Residues whose propensity falls below ``threshold`` in ``table``.
+
+    Derived from the same table the objective scores with, rather than
+    hardcoded. A hand-written list drifts from the scale it is supposed to
+    represent: the previous one called isoleucine a poor helix former, when
+    Pace-Scholtz places it at 0.41 kcal/mol -- better than serine, tyrosine,
+    phenylalanine, histidine, valine, asparagine and threonine -- and
+    Chou-Fasman puts it at 1.08, which is helix-favouring. The strategy was
+    proposing Ile->Glu for "poor propensity" while the scorer rated Ile the
+    better of the two. Deriving both from one source makes that class of
+    contradiction impossible.
+    """
+    return frozenset(aa for aa, v in table.items() if len(aa) == 1 and v < threshold)
+
+
 @register
 class HelixPropensity(Strategy):
     name = "helix_propensity"
     mechanism = ("Match residues to the secondary structure they sit in. "
-                 "Beta-branched and helix-breaking residues inside a helix "
-                 "cost stability that costs nothing to recover.")
+                 "Helix-breaking residues inside a helix cost stability that "
+                 "costs nothing to recover.")
     applies_to = frozenset({SOLUBLE, MEMBRANE})
 
-    POOR = frozenset("GPVIT")
+    #: Chou-Fasman < 1.0 means the residue disfavours a helix. Only these are
+    #: worth replacing; anything at or above 1.0 is already doing its job.
+    THRESHOLD = 1.0
+
+    @property
+    def POOR(self) -> frozenset[str]:
+        from ..scoring import HELIX_PROP
+        return _poor_formers(HELIX_PROP, self.THRESHOLD)
 
     def diagnose(self, ctx: DesignContext) -> list[int]:
+        poor = self.POOR
         return [p for p in ctx.designable
-                if ctx.ss_at(p) == "H" and ctx.aa(p) in self.POOR]
+                if ctx.ss_at(p) == "H" and ctx.aa(p) in poor]
 
     def propose(self, ctx, positions, rng):
         out = []
@@ -419,11 +457,17 @@ class BetaPropensity(Strategy):
                  "favour the extended backbone that sheets require.")
     applies_to = frozenset({SOLUBLE, MEMBRANE})
 
-    POOR = frozenset("GPDNS")
+    THRESHOLD = 1.0
+
+    @property
+    def POOR(self) -> frozenset[str]:
+        from ..scoring import SHEET_PROP
+        return _poor_formers(SHEET_PROP, self.THRESHOLD)
 
     def diagnose(self, ctx: DesignContext) -> list[int]:
+        poor = self.POOR
         return [p for p in ctx.designable
-                if ctx.ss_at(p) == "E" and ctx.aa(p) in self.POOR]
+                if ctx.ss_at(p) == "E" and ctx.aa(p) in poor]
 
     def propose(self, ctx, positions, rng):
         out = []

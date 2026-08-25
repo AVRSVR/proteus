@@ -281,36 +281,34 @@ def test_every_surviving_mutation_is_attributed():
     actually driven by the strategy library."""
     st = poor_bundle()
     ctx = DesignContext(structure=st, frozen=frozenset(range(1, 9)))
-    result = Engine(ctx, seed=0).run(generations=25)
+    # Mutation cost off, so the run definitely produces changes to attribute.
+    result = Engine(ctx, seed=0, mutation_cost=0.0).run(generations=25)
     prov = result.provenance()
     assert prov, "run produced no changes at all"
     unattributed = [p for p, (_o, _n, why) in prov.items() if not why]
     assert not unattributed, f"unattributed positions: {unattributed}"
 
 
-def test_provenance_matches_the_accepted_walk():
-    """Provenance must reproduce the last accepted sequence exactly.
+def test_provenance_describes_the_returned_sequence():
+    """Provenance must describe ``best_sequence`` -- the thing handed back.
 
-    It tracks the accepted trajectory, so it is checked against the final
-    accepted state rather than against ``best_sequence`` -- the best score can
-    occur at an earlier point on that walk.
+    Reporting the accepted walk instead listed changes absent from the result,
+    which produced output showing nine changed positions beside a summary
+    claiming 100% identity retained.
     """
     st = poor_bundle()
     ctx = DesignContext(structure=st)
-    result = Engine(ctx, seed=0).run(generations=25)
-    accepted = [m for m in result.trajectory if m.accepted]
-    if not accepted:
-        pytest.skip("no moves were accepted")
-    final = accepted[-1].sequence
+    result = Engine(ctx, seed=0, mutation_cost=0.0).run(generations=25)
 
     prov = result.provenance()
     for pos, (old, new, _why) in prov.items():
         assert old == st.sequence[pos - 1]
-        assert new == final[pos - 1]
+        assert new == result.best_sequence[pos - 1]
 
-    truly_changed = {i + 1 for i, (a, b) in enumerate(zip(st.sequence, final))
-                     if a != b}
+    truly_changed = {i + 1 for i, (a, b) in
+                     enumerate(zip(st.sequence, result.best_sequence)) if a != b}
     assert set(prov) == truly_changed
+    assert len(prov) == result.n_mutations
 
 
 def test_provenance_excludes_positions_changed_and_reverted():
@@ -337,3 +335,68 @@ def test_credit_only_counts_surviving_mutations():
     if credit:
         assert all(v > 0 for v in credit.values())
         assert set(credit) <= {s for m in result.trajectory for s in m.strategies}
+
+
+# --------------------------------------------------------- mutation budget
+
+def test_mutation_budget_is_never_exceeded():
+    """A tool that rewrites half the sequence has redesigned the protein."""
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    result = Engine(ctx, seed=0, mutation_budget=0.10, mutation_cost=0.0).run(
+        generations=40)
+    assert result.n_mutations <= result.max_mutations
+    assert result.n_mutations <= 0.10 * len(st) + 1
+
+
+def test_tighter_budget_yields_fewer_mutations():
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    loose = Engine(ctx, seed=0, mutation_budget=0.30, mutation_cost=0.0).run(
+        generations=40)
+    tight = Engine(ctx, seed=0, mutation_budget=0.05, mutation_cost=0.0).run(
+        generations=40)
+    assert tight.n_mutations <= loose.n_mutations
+
+
+def test_mutation_cost_suppresses_neutral_edits():
+    """Pricing a mutation makes it earn its place rather than merely not hurt."""
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    free = Engine(ctx, seed=0, mutation_cost=0.0).run(generations=40)
+    priced = Engine(ctx, seed=0, mutation_cost=1.0).run(generations=40)
+    assert priced.n_mutations <= free.n_mutations
+
+
+def test_identity_and_mutation_count_agree():
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    r = Engine(ctx, seed=0, mutation_cost=0.0).run(generations=25)
+    assert r.identity == pytest.approx(1.0 - r.n_mutations / len(st))
+
+
+def test_frozen_positions_are_excluded_from_the_budget():
+    st = poor_bundle()
+    frozen = frozenset(range(1, 41))
+    ctx = DesignContext(structure=st, frozen=frozen)
+    r = Engine(ctx, seed=0, mutation_budget=0.5, mutation_cost=0.0).run(generations=20)
+    assert r.max_mutations <= 0.5 * len(ctx.designable) + 1
+    assert not (set(r.provenance()) & frozen)
+
+
+def test_rationale_names_the_strategy_that_chose_the_residue():
+    """A proline must not be credited to a mechanism that never proposes one."""
+    from proteus import REGISTRY
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    r = Engine(ctx, seed=0, mutation_cost=0.0).run(generations=30)
+    for pos, (_old, new, why) in r.provenance().items():
+        if not why or ":" not in why:
+            continue
+        name = why.split(":", 1)[0]
+        strat = REGISTRY.get(name)
+        proposals = strat.run(DesignContext(structure=st), random.Random(0), 999)
+        allowed = {p.allowed for p in proposals if p.resi == pos}
+        if allowed:
+            assert any(new in a for a in allowed), (
+                f"{name} credited for {new} at {pos} but never proposes it")

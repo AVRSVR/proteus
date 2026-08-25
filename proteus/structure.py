@@ -46,6 +46,10 @@ class Residue:
     c: np.ndarray
     cb: np.ndarray
     has_real_cb: bool
+    #: CA B-factor. Structure predictors write per-residue confidence here --
+    #: pLDDT for AlphaFold and ESMFold -- so it is carried through rather than
+    #: discarded.
+    bfactor: float = 0.0
 
     @property
     def aa(self) -> str:
@@ -148,6 +152,10 @@ def from_pdb(path: str, chain: str | None = None, model: int = 0) -> Structure:
                 cb, real = res["CB"].get_coord().astype(float), True
             else:
                 cb, real = _virtual_cb(n, ca, c), False
+            try:
+                bfac = float(res["CA"].get_bfactor())
+            except Exception:
+                bfac = 0.0
             residues.append(Residue(
                 resi=len(residues) + 1,
                 name3=res.get_resname(),
@@ -155,6 +163,7 @@ def from_pdb(path: str, chain: str | None = None, model: int = 0) -> Structure:
                 pdb_number=res.id[1],
                 icode=res.id[2],
                 n=n, ca=ca, c=c, cb=cb, has_real_cb=real,
+                bfactor=bfac,
             ))
 
     if not residues:

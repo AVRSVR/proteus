@@ -41,6 +41,23 @@ proteus run design.pdb --freeze 1-10,47-53 --explain
 proteus run design.pdb --knowledge kb.json          # accumulate across runs
 proteus leaderboard kb.json --for other.pdb         # what should work here?
 proteus strategies                                  # the library, with mechanisms
+proteus validate design.pdb --predicted folded.pdb  # does it still fold?
+```
+
+### How much it is allowed to change
+
+A stabilization tool that rewrites half the sequence has not stabilized the protein, it has designed a different one. Established campaigns (PROSS, FRESCO) change single-digit percentages of positions.
+
+Two mechanisms hold the edit down, and they do different jobs:
+
+- `--mutation-budget 0.15` — a hard ceiling, as a fraction of designable positions.
+- `--mutation-cost 0.10` — a price per mutation, so a change must *earn* its place rather than merely not hurt.
+
+The price matters more than the ceiling. On a 66-residue design, pricing mutations gave **8 mutations and +0.0214** improvement where a free budget gave **9 mutations and +0.0114**. Charging for edits makes the loop pick better ones, not merely fewer.
+
+```
+mutations        : 8 of at most 9 allowed
+sequence identity: 87.9% retained
 ```
 
 ---
@@ -175,6 +192,27 @@ Every strategy was run in isolation on a validated de novo design, a prototype o
 - **Credit assignment is joint.** When two mechanisms are applied together and the result improves, both are rewarded. Raw per-arm history is retained so the ambiguity can be analysed.
 - **The knowledge base is only as good as the objective.** It faithfully learns which mechanisms improve `HeuristicScorer`. Whether that tracks real stability is the open question, and matters more than adding more strategies.
 - **Nothing here verifies the fold.** No refold check, no energy function. A run tells you the design improved on a readable heuristic; it does not tell you the sequence still folds. That gate was built, could not run on the development machine, and was removed rather than shipped untested — it is in git history at `350f04f`.
+
+---
+
+## Verification
+
+Nothing in the optimisation confirms the design still folds. That check is separate, and deliberately decoupled from any particular predictor:
+
+```bash
+proteus validate design.pdb --predicted esmfold_output.pdb
+```
+
+```
+PASS  scRMSD 1.34 A, pLDDT 88.2  (refolds to the intended backbone)
+FAIL  scRMSD 4.94 A  (scRMSD 4.94 > 2.0 A)
+```
+
+Fold the designed sequence with whatever you have — ESMFold or AlphaFold on Colab, a cluster, a colleague's GPU — and hand the file over. Proteus does the part that needs care. pLDDT is read from the B-factor column, where AlphaFold and ESMFold both write it.
+
+Every RMSD is superposed with Kabsch first, including a determinant correction so a mirror image cannot pass. This is not incidental: computing deviation as a raw coordinate difference, as the earlier prototype's MD did, measures rigid-body tumbling rather than shape change — a correct structure rotated 30° scores over 5 Å that way. The tests assert rotation and translation invariance directly, and check the naive quantity is large in the same test so the guard cannot silently stop testing anything.
+
+`ESMFoldGate` will run the model in-process if you have the memory for it (roughly 16 GB; `esmfold_v1` bundles ESM-2 3B). It has not been executed here — the file-based path has.
 
 ---
 
