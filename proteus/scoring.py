@@ -80,6 +80,20 @@ AGGREGATION = {
 }
 
 
+# Chemical degradation routes. These are not folding terms -- they are the
+# ways a protein falls apart in a tube over weeks, and nature avoids them in
+# proteins that must last. Each is a sequence motif with a known mechanism:
+#
+#   N-G, N-S, N-N   asparagine deamidation, fastest when followed by a small
+#                   flexible residue; converts Asn to Asp and adds a charge
+#   D-G, D-P, D-S   aspartate isomerisation to iso-Asp, which kinks the chain
+#   N-X-S/T         N-linked glycosylation sequon (X not proline)
+#
+# Weights are relative severities, not rates.
+DEAMIDATION = {"NG": 1.0, "NS": 0.6, "NN": 0.5, "NT": 0.4, "NA": 0.3}
+ISOMERISATION = {"DG": 1.0, "DP": 0.6, "DS": 0.5, "DD": 0.4}
+
+
 def _byte_table(mapping: dict[str, float], default: float = 0.0,
                 transform=None) -> np.ndarray:
     """Build a 256-entry array indexed by ASCII byte.
@@ -167,6 +181,12 @@ class HeuristicScorer(Scorer):
     ``bb_entropy``   glycine costs unfolded-state entropy, proline in loops
                      recovers it.
     ``capping``      rewards satisfied helix N- and C-caps.
+    ``liabilities``  penalises chemical degradation motifs -- deamidation,
+                     isomerisation, glycosylation sequons, unpaired cysteine
+                     and exposed methionine.
+    ``interactions`` rewards aromatic stacking and cation-pi contacts, which
+                     are real packing energy that a per-residue burial term
+                     cannot see.
 
     The last two exist because of a systematic bias found during auditing: a
     mechanism the objective cannot measure will always lose on the leaderboard
@@ -185,6 +205,13 @@ class HeuristicScorer(Scorer):
     W_CHARGE = 0.5
     W_BB_ENTROPY = 0.5
     W_CAPPING = 0.4
+    W_LIABILITY = 0.6
+    W_INTERACTION = 0.5
+
+    #: Aromatic ring-centre separation admitting a stacking interaction.
+    STACK_MIN, STACK_MAX = 4.5, 7.5
+    #: Cation to ring-centre separation for a cation-pi contact.
+    CATION_PI_MAX = 6.5
 
     IDEAL_CORE_VOLUME = 165.0        # roughly leucine
     PATCH_RADIUS = 8.0
@@ -222,6 +249,8 @@ class HeuristicScorer(Scorer):
             "net_charge": self._charge(charge),
             "bb_entropy": self._bb_entropy(ctx, idx),
             "capping": self._capping(ctx, idx),
+            "liabilities": self._liabilities(ctx, sequence),
+            "interactions": self._interactions(ctx, sequence),
         }
         return ScoreBreakdown(total=float(sum(terms.values())), terms=terms,
                               n_residues=len(sequence))
@@ -294,6 +323,71 @@ class HeuristicScorer(Scorer):
         good_c = np.isin(idx, [ord(a) for a in self.C_CAP_GOOD])
         satisfied = float((n_cap & good_n).sum() + (c_cap & good_c).sum())
         return -self.W_CAPPING * satisfied / max(len(idx), 1)
+
+    def _liabilities(self, ctx: DesignContext, seq: str) -> float:
+        """Chemical degradation motifs, weighted by exposure.
+
+        A buried motif is far less reactive than an exposed one -- the solvent
+        has to reach it -- so each hit is scaled by how exposed the residue is.
+        """
+        n = len(seq)
+        if n < 2:
+            return 0.0
+        exposure = np.where(ctx.is_surface, 1.0,
+                            np.where(ctx.is_core, 0.15, 0.5))
+        total = 0.0
+
+        for i in range(n - 1):
+            pair = seq[i:i + 2]
+            total += DEAMIDATION.get(pair, 0.0) * exposure[i]
+            total += ISOMERISATION.get(pair, 0.0) * exposure[i]
+
+        # N-linked glycosylation sequon: Asn, any residue but proline, Ser/Thr.
+        for i in range(n - 2):
+            if seq[i] == "N" and seq[i + 1] != "P" and seq[i + 2] in "ST":
+                total += 1.0 * exposure[i]
+
+        # Unpaired cysteine: free thiols oxidise, scramble and cross-link.
+        cys = [p for p in ctx.positions if seq[p - 1] == "C"]
+        if cys:
+            paired = set()
+            for a_idx, i in enumerate(cys):
+                for j in cys[a_idx + 1:]:
+                    if ctx.cb_dist[i - 1, j - 1] <= 4.5:
+                        paired.update((i, j))
+            total += 1.2 * sum(exposure[p - 1] for p in cys if p not in paired)
+
+        # Exposed methionine oxidises readily.
+        total += 0.5 * sum(exposure[p - 1] for p in ctx.positions
+                           if seq[p - 1] == "M" and ctx.is_surface[p - 1])
+
+        return self.W_LIABILITY * total / n
+
+    def _interactions(self, ctx: DesignContext, seq: str) -> float:
+        """Aromatic stacking and cation-pi contacts.
+
+        Both are real packing energy that a per-residue hydrophobicity term
+        cannot represent: they depend on which *pair* of residues sit near each
+        other, not on either one alone.
+        """
+        n = len(seq)
+        aromatic = [p for p in ctx.positions if seq[p - 1] in "FWY"]
+        cations = [p for p in ctx.positions if seq[p - 1] in "KR"]
+        if not aromatic:
+            return 0.0
+
+        reward = 0.0
+        for a_idx, i in enumerate(aromatic):
+            for j in aromatic[a_idx + 1:]:
+                d = ctx.cb_dist[i - 1, j - 1]
+                if self.STACK_MIN <= d <= self.STACK_MAX:
+                    # Buried stacks are worth more; solvent competes at the surface.
+                    reward += 1.0 if ctx.is_core[i - 1] or ctx.is_core[j - 1] else 0.4
+            for j in cations:
+                if ctx.cb_dist[i - 1, j - 1] <= self.CATION_PI_MAX:
+                    reward += 0.6
+
+        return -self.W_INTERACTION * reward / max(n, 1)
 
     def _charge(self, charge: np.ndarray) -> float:
         per_res = abs(float(charge.sum())) / max(len(charge), 1)

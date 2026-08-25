@@ -90,7 +90,7 @@ def cmd_run(args) -> int:
         policy=args.policy,
         strategies_per_move=args.strategies_per_move,
         mutation_budget=args.mutation_budget,
-        mutation_cost=args.mutation_cost,
+        min_gain_per_mutation=args.min_gain,
         knowledge=knowledge,
         protein=Path(args.pdb).stem,
         seed=args.seed,
@@ -235,9 +235,11 @@ def main(argv: list[str] | None = None) -> int:
                        metavar="FRAC",
                        help="hard ceiling on mutations as a fraction of "
                             "designable positions (default 0.15)")
-    p_run.add_argument("--mutation-cost", type=float, default=0.10,
-                       help="price per mutation, so a change must earn its "
-                            "place rather than merely not hurt")
+    p_run.add_argument("--min-gain", type=float, default=0.0003, metavar="X",
+                       help="per-residue score improvement a mutation must "
+                            "deliver to be kept (default 0.0003). This is what "
+                            "makes the tool specific: broken designs offer far "
+                            "more per mutation than sound ones")
     p_run.add_argument("--seed", type=int, default=0)
     p_run.add_argument("--out", help="write the best sequence to this FASTA file")
     p_run.add_argument("--knowledge", metavar="PATH",

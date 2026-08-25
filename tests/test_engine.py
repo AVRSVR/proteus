@@ -282,7 +282,7 @@ def test_every_surviving_mutation_is_attributed():
     st = poor_bundle()
     ctx = DesignContext(structure=st, frozen=frozenset(range(1, 9)))
     # Mutation cost off, so the run definitely produces changes to attribute.
-    result = Engine(ctx, seed=0, mutation_cost=0.0).run(generations=25)
+    result = Engine(ctx, seed=0, min_gain_per_mutation=0.0).run(generations=25)
     prov = result.provenance()
     assert prov, "run produced no changes at all"
     unattributed = [p for p, (_o, _n, why) in prov.items() if not why]
@@ -298,7 +298,7 @@ def test_provenance_describes_the_returned_sequence():
     """
     st = poor_bundle()
     ctx = DesignContext(structure=st)
-    result = Engine(ctx, seed=0, mutation_cost=0.0).run(generations=25)
+    result = Engine(ctx, seed=0, min_gain_per_mutation=0.0).run(generations=25)
 
     prov = result.provenance()
     for pos, (old, new, _why) in prov.items():
@@ -343,7 +343,7 @@ def test_mutation_budget_is_never_exceeded():
     """A tool that rewrites half the sequence has redesigned the protein."""
     st = poor_bundle()
     ctx = DesignContext(structure=st)
-    result = Engine(ctx, seed=0, mutation_budget=0.10, mutation_cost=0.0).run(
+    result = Engine(ctx, seed=0, mutation_budget=0.10, min_gain_per_mutation=0.0).run(
         generations=40)
     assert result.n_mutations <= result.max_mutations
     assert result.n_mutations <= 0.10 * len(st) + 1
@@ -352,26 +352,45 @@ def test_mutation_budget_is_never_exceeded():
 def test_tighter_budget_yields_fewer_mutations():
     st = poor_bundle()
     ctx = DesignContext(structure=st)
-    loose = Engine(ctx, seed=0, mutation_budget=0.30, mutation_cost=0.0).run(
+    loose = Engine(ctx, seed=0, mutation_budget=0.30, min_gain_per_mutation=0.0).run(
         generations=40)
-    tight = Engine(ctx, seed=0, mutation_budget=0.05, mutation_cost=0.0).run(
+    tight = Engine(ctx, seed=0, mutation_budget=0.05, min_gain_per_mutation=0.0).run(
         generations=40)
     assert tight.n_mutations <= loose.n_mutations
 
 
-def test_mutation_cost_suppresses_neutral_edits():
-    """Pricing a mutation makes it earn its place rather than merely not hurt."""
+def test_min_gain_threshold_suppresses_neutral_edits():
+    """A mutation must earn its place rather than merely not hurt."""
     st = poor_bundle()
     ctx = DesignContext(structure=st)
-    free = Engine(ctx, seed=0, mutation_cost=0.0).run(generations=40)
-    priced = Engine(ctx, seed=0, mutation_cost=1.0).run(generations=40)
+    free = Engine(ctx, seed=0, min_gain_per_mutation=0.0).run(generations=40)
+    priced = Engine(ctx, seed=0, min_gain_per_mutation=0.01).run(generations=40)
     assert priced.n_mutations <= free.n_mutations
+
+
+def test_min_gain_threshold_is_size_independent():
+    """The bar must not get cheaper because the protein is larger.
+
+    An earlier form divided the price by chain length, which made the same
+    setting six times cheaper per mutation on a 400-residue protein than on a
+    66-residue one, so large proteins accumulated dozens of marginal edits.
+    """
+    small = poor_bundle(n_helices=3, per_helix=20)
+    large = poor_bundle(n_helices=6, per_helix=20)
+    threshold = 0.002
+    a = Engine(DesignContext(structure=small), seed=0,
+               min_gain_per_mutation=threshold)
+    b = Engine(DesignContext(structure=large), seed=0,
+               min_gain_per_mutation=threshold)
+    # The penalty for one mutation is identical regardless of chain length.
+    assert a._mutation_penalty(1) == pytest.approx(b._mutation_penalty(1))
+    assert a._mutation_penalty(5) == pytest.approx(threshold * 5)
 
 
 def test_identity_and_mutation_count_agree():
     st = poor_bundle()
     ctx = DesignContext(structure=st)
-    r = Engine(ctx, seed=0, mutation_cost=0.0).run(generations=25)
+    r = Engine(ctx, seed=0, min_gain_per_mutation=0.0).run(generations=25)
     assert r.identity == pytest.approx(1.0 - r.n_mutations / len(st))
 
 
@@ -379,7 +398,7 @@ def test_frozen_positions_are_excluded_from_the_budget():
     st = poor_bundle()
     frozen = frozenset(range(1, 41))
     ctx = DesignContext(structure=st, frozen=frozen)
-    r = Engine(ctx, seed=0, mutation_budget=0.5, mutation_cost=0.0).run(generations=20)
+    r = Engine(ctx, seed=0, mutation_budget=0.5, min_gain_per_mutation=0.0).run(generations=20)
     assert r.max_mutations <= 0.5 * len(ctx.designable) + 1
     assert not (set(r.provenance()) & frozen)
 
@@ -389,7 +408,7 @@ def test_rationale_names_the_strategy_that_chose_the_residue():
     from proteus import REGISTRY
     st = poor_bundle()
     ctx = DesignContext(structure=st)
-    r = Engine(ctx, seed=0, mutation_cost=0.0).run(generations=30)
+    r = Engine(ctx, seed=0, min_gain_per_mutation=0.0).run(generations=30)
     for pos, (_old, new, why) in r.provenance().items():
         if not why or ":" not in why:
             continue

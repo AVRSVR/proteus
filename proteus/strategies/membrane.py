@@ -244,3 +244,89 @@ class HydrophobicMismatch(Strategy):
                 f"but carries {ctx.aa(p)}",
             ))
         return out
+
+
+@register
+class GlycineZipper(Strategy):
+    name = "glycine_zipper"
+    mechanism = ("Install GxxxG packing motifs. Small residues spaced four "
+                 "apart land on the same face of a transmembrane helix and "
+                 "create a flat patch, letting two helices approach closely "
+                 "enough for backbone-to-backbone contact. GxxxG is the "
+                 "commonest transmembrane helix association motif in nature -- "
+                 "it is what holds glycophorin A together -- and it works "
+                 "precisely because glycine removes a sidechain rather than "
+                 "adding an interaction.")
+    applies_to = frozenset({MEMBRANE})
+
+    SMALL = frozenset("GAS")
+    MAX_SITES = 3
+
+    def _sites(self, ctx: DesignContext) -> list[int]:
+        """Positions that would complete a small-residue pair at i, i+4.
+
+        Only inside the bilayer, only where the position faces another helix
+        rather than lipid: the motif exists to mediate protein-protein contact.
+        """
+        out = []
+        for p in ctx.designable:
+            if not ctx.is_membrane_buried(p) or ctx.ss_at(p) != "H":
+                continue
+            if ctx.aa(p) in self.SMALL:
+                continue
+            for offset in (-4, 4):
+                q = p + offset
+                if 1 <= q <= len(ctx) and ctx.aa(q) in self.SMALL:
+                    if ctx.ss_at(q) == "H":
+                        out.append(p)
+                        break
+        return out
+
+    def diagnose(self, ctx: DesignContext) -> list[int]:
+        return self._sites(ctx)
+
+    def propose(self, ctx, positions, rng):
+        return [Proposal(p, self.SMALL, self.name,
+                         f"{ctx.label(p)} completes a GxxxG-type packing face "
+                         f"at depth {ctx.depth(p):+.1f}A")
+                for p in positions[: self.MAX_SITES]]
+
+
+@register
+class TerminalAnchor(Strategy):
+    name = "terminal_anchor"
+    mechanism = ("Cap the ends of transmembrane segments. Where a helix leaves "
+                 "the bilayer, nature places residues that mark the boundary: "
+                 "aromatics just inside it and charges just outside. Getting "
+                 "the transition right stops the helix sliding vertically and "
+                 "fixes how deeply the segment sits.")
+    applies_to = frozenset({MEMBRANE})
+
+    def _sites(self, ctx: DesignContext) -> dict[int, str]:
+        half = ctx.membrane.lipid_core_half
+        sites: dict[int, str] = {}
+        for start, end in ctx.ss_segments("H"):
+            for p in (start, end):
+                if p not in ctx.designable:
+                    continue
+                d = abs(ctx.depth(p))
+                if half - 4.0 <= d <= half + 4.0:
+                    sites[p] = "inside" if d <= half else "outside"
+        return sites
+
+    def diagnose(self, ctx: DesignContext) -> list[int]:
+        return sorted(self._sites(ctx))
+
+    def propose(self, ctx, positions, rng):
+        sites = self._sites(ctx)
+        out = []
+        for p in positions:
+            where = sites.get(p)
+            if where == "inside":
+                allowed, why = BELT_AROMATIC, "just inside the bilayer boundary"
+            else:
+                allowed, why = frozenset("KRDE"), "just outside the bilayer boundary"
+            out.append(Proposal(p, allowed, self.name,
+                                f"{ctx.label(p)} is {why} "
+                                f"(depth {ctx.depth(p):+.1f}A)"))
+        return out

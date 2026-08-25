@@ -51,9 +51,22 @@ A stabilization tool that rewrites half the sequence has not stabilized the prot
 Two mechanisms hold the edit down, and they do different jobs:
 
 - `--mutation-budget 0.15` — a hard ceiling, as a fraction of designable positions.
-- `--mutation-cost 0.10` — a price per mutation, so a change must *earn* its place rather than merely not hurt.
+- `--min-gain 0.0003` — the per-residue score improvement a mutation must deliver to be kept.
 
-The price matters more than the ceiling. On a 66-residue design, pricing mutations gave **8 mutations and +0.0214** improvement where a free budget gave **9 mutations and +0.0114**. Charging for edits makes the loop pick better ones, not merely fewer.
+The second is also what makes the tool **specific**. Gain-per-mutation turns out to separate a broken design from a sound one cleanly:
+
+| | gain per mutation | |
+| --- | --- | --- |
+| score-hacked design | 0.00057 | repaired |
+| experimentally validated design | 0.00016 | left alone |
+| natural protein (gp120) | 0.000016 | left alone |
+| natural protein (CDC42) | 0.000009 | left alone |
+
+An absolute floor near 0.0003 therefore repairs the first and leaves the rest untouched, which is the correct behaviour for a repair tool: evolved proteins are already near-optimal on these terms and there is nothing to gain by editing them.
+
+Two earlier formulations failed, and both failures are worth recording. Expressing the price as `cost / n_residues` made it **size-dependent** — the same setting was six times cheaper per mutation on a 400-residue protein than on a 66-residue one, so large proteins accumulated dozens of marginal edits. Expressing it *relative* to the gain observed within each run **normalised away exactly the signal that distinguishes a broken protein from a sound one**, and every protein ran to the budget ceiling.
+
+The threshold is absolute and therefore tied to this scorer's scale. Changing the scorer's terms or weights means re-measuring it; the table above is the procedure.
 
 ```
 mutations        : 8 of at most 9 allowed
@@ -114,17 +127,31 @@ Deliberate limitation: credit is **joint**. When two mechanisms are applied toge
 
 ## Strategy library
 
-15 mechanisms, each carrying a description of the biophysics it exploits.
+33 mechanisms in five families, each carrying a description of the biophysics it exploits and each gated on real geometry or a real sequence motif.
 
-**Soluble** — `core_packing`, `cavity_fill`, `surface_depolarize`, `salt_bridge`, `disulfide`, `helix_capping`, `loop_rigidify`, `helix_propensity`, `beta_propensity`
+**Core stability** (soluble) — `core_packing`, `cavity_fill`, `surface_depolarize`, `salt_bridge`, `disulfide`, `helix_capping`, `loop_rigidify`, `helix_propensity`, `beta_propensity`
 
-Each is gated on real geometry: disulfides on Cβ–Cβ and Cα–Cα distance, salt bridges on whether the charged groups can actually reach, proline on whether the backbone φ already permits it, cavity filling on a measured local volume deficit.
+**Chemical liabilities** — the routes by which a protein degrades over weeks rather than unfolds in seconds. Long-lived natural proteins are measurably depleted in these motifs; a design has no history filtering them out.
+`deamidation_motif`, `isomerisation_motif`, `glycosylation_sequon`, `free_cysteine`, `methionine_oxidation`
 
-**Membrane** — `lipid_facing_hydrophobic`, `aromatic_belt`, `snorkeling`, `positive_inside`, `interhelical_polar`, `hydrophobic_mismatch`
+**Thermophile-inspired** — from comparing thermophile proteins against mesophile orthologues: same fold, same function, different operating temperature. The differences are mostly on the *surface*, not in the core.
+`arginine_preference`, `thermolabile_amide`, `surface_charge_enrichment`, `salt_bridge_network`, `helix_dipole`, `capping_box`
+
+**Pairwise interactions and sheet architecture** — energy invisible to any per-residue rule, because it depends on which *pair* of residues sit near each other.
+`aromatic_cluster`, `cation_pi`, `buried_unsatisfied_polar`, `beta_edge_protection`, `beta_turn`
+
+**Membrane** — burial rules inverted inside the bilayer.
+`lipid_facing_hydrophobic`, `aromatic_belt`, `snorkeling`, `positive_inside`, `interhelical_polar`, `hydrophobic_mismatch`, `glycine_zipper`, `terminal_anchor`
 
 ```bash
 proteus strategies    # full descriptions
 ```
+
+### What is deliberately absent
+
+The prototype this replaces had strategies called `zipper`, `teflon`, `alanine_shave` and `lactam_staple`. None survived. The first three lower a score without a mechanism behind them. Lactam stapling is a real technique, but a real lactam needs i,i+4 or i,i+7 on the same helical face and a modelled covalent bond; picking two surface residues and making one lysine and one glutamate produces an unrelated Lys and Glu and no staple.
+
+The bar for inclusion is that a mechanism can be *gated* — that there is a geometric or sequence criterion distinguishing where it applies from where it does not. A strategy that fires everywhere carries no information for the selector, which is why `cation_pi` is capped: ring-face geometry cannot be computed from backbone atoms and CB alone, so it under-claims rather than guesses.
 
 Adding one requires no geometry code:
 

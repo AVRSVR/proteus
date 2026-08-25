@@ -427,9 +427,11 @@ class HelixPropensity(Strategy):
                  "costs nothing to recover.")
     applies_to = frozenset({SOLUBLE, MEMBRANE})
 
-    #: Chou-Fasman < 1.0 means the residue disfavours a helix. Only these are
-    #: worth replacing; anything at or above 1.0 is already doing its job.
-    THRESHOLD = 1.0
+    #: Chou-Fasman below this counts as disfavouring a helix. Set at 0.9
+    #: rather than 1.0 deliberately: at the neutral point the strategy also
+    #: flagged arginine (0.98) and histidine (1.00), which are not doing any
+    #: harm, and diagnosing 29% of a protein tells the selector nothing.
+    THRESHOLD = 0.9
 
     @property
     def POOR(self) -> frozenset[str]:
@@ -457,7 +459,7 @@ class BetaPropensity(Strategy):
                  "favour the extended backbone that sheets require.")
     applies_to = frozenset({SOLUBLE, MEMBRANE})
 
-    THRESHOLD = 1.0
+    THRESHOLD = 0.9
 
     @property
     def POOR(self) -> frozenset[str]:

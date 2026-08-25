@@ -276,7 +276,7 @@ class Engine:
         calibration_moves: int = 6,
         tabu_tenure: int = 4,
         mutation_budget: float = 0.15,
-        mutation_cost: float = 0.10,
+        min_gain_per_mutation: float = 0.0003,
         knowledge=None,
         protein: str = "",
         seed: int | None = None,
@@ -308,17 +308,33 @@ class Engine:
         #   mutation_budget  a hard ceiling, as a fraction of designable
         #                    positions, on how far the design may drift from
         #                    the input sequence.
-        #   mutation_cost    a price per mutation, so a change has to earn its
-        #                    place rather than merely not hurt. This is what
-        #                    stops the loop accumulating neutral edits.
+        #   min_gain_per_mutation
+        #                    the improvement in per-residue score a mutation
+        #                    must deliver to be worth keeping. This is what
+        #                    stops the loop accumulating neutral edits, and it
+        #                    is also what makes the tool *specific*.
         #
-        # The default cost was calibrated empirically rather than guessed: on a
-        # 66-residue design, 0.10 gave 8 mutations and +0.0214 raw improvement
-        # where a free budget gave 9 mutations and +0.0114. Pricing mutations
-        # makes the loop pick better ones, not merely fewer. At 0.30 nothing
-        # clears the bar at all and the input is returned unchanged.
+        # Gain-per-mutation is the quantity that separates a broken design from
+        # a sound one. Measured across a panel: a score-hacked design offers
+        # 0.00057 per mutation, an experimentally validated design 0.00016, and
+        # natural evolved proteins 0.00001 or less. An absolute floor near
+        # 0.0003 therefore repairs the first and leaves the rest alone, which
+        # is the correct behaviour for a repair tool.
+        #
+        # Two earlier formulations failed, and both failures are instructive.
+        # Expressing the price as cost/n_residues made it size-dependent: the
+        # same setting was six times cheaper per mutation on a 400-residue
+        # protein than on a 66-residue one, so large proteins accumulated
+        # dozens of marginal edits. Expressing it *relative* to the gain
+        # observed in the run normalised away exactly the signal that
+        # distinguishes a broken protein from a sound one, and every protein
+        # ran to the budget ceiling.
+        #
+        # The threshold is absolute and therefore tied to this scorer's scale.
+        # Changing the scorer's terms or weights means re-measuring it; the
+        # panel above is the procedure.
         self.mutation_budget = mutation_budget
-        self.mutation_cost = mutation_cost
+        self.min_gain_per_mutation = max(min_gain_per_mutation, 0.0)
         n_designable = max(len(ctx.designable), 1)
         self.max_mutations = max(1, int(round(mutation_budget * n_designable)))
 
@@ -352,17 +368,22 @@ class Engine:
         return self.t0 * (self.t1 / self.t0) ** frac
 
     def _mutation_penalty(self, n_mutations: int) -> float:
-        """Per-residue price of having drifted this far from the input."""
-        if self.mutation_cost <= 0:
-            return 0.0
-        return self.mutation_cost * n_mutations / max(len(self.ctx), 1)
+        """Price of having drifted this far from the input.
+
+        Deliberately *not* divided by chain length. The question a mutation has
+        to answer is "did this change earn its keep", and that question does
+        not get easier because the protein is larger.
+        """
+        return self.min_gain_per_mutation * n_mutations
 
     def _calibrate(self, deltas: list[float]) -> None:
         """Set the temperature schedule from the observed delta scale.
 
-        The starting temperature is chosen so a typical uphill move is accepted
-        with probability about 1/2, and the final temperature is an order of
-        magnitude colder, so the run ends close to greedy.
+        Temperature has no meaningful absolute value -- it must be compared
+        against the size of the moves actually being made -- so it is measured
+        rather than chosen. The starting point accepts a typical uphill move
+        with probability about one half, cooling by an order of magnitude over
+        the run.
         """
         uphill = [abs(d) for d in deltas if d > 0]
         scale = (sorted(uphill)[len(uphill) // 2] if uphill
@@ -461,7 +482,6 @@ class Engine:
                 calibration_deltas.append(delta)
                 if len(calibration_deltas) >= self.calibration_moves:
                     self._calibrate(calibration_deltas)
-
             mutations = tuple(
                 (i + 1, a, b) for i, (a, b) in enumerate(zip(current_seq, candidate))
                 if a != b
