@@ -30,32 +30,18 @@ On the test structures these two signals correlate at |r| < 0.5, which is the pr
 
 ## Running it
 
-Proteus splits into a cheap half and an expensive half, and they belong in different places.
-
-**The loop runs anywhere.** Core dependencies are `numpy` and `biopython` only.
+Core dependencies are `numpy` and `biopython`. Nothing else.
 
 ```bash
 pip install -e ".[dev]"
-proteus analyze design.pdb
+
+proteus analyze design.pdb                          # diagnose, change nothing
+proteus analyze design.pdb --membrane               # invert the burial rules
 proteus run design.pdb --freeze 1-10,47-53 --explain
+proteus run design.pdb --knowledge kb.json          # accumulate across runs
+proteus leaderboard kb.json --for other.pdb         # what should work here?
+proteus strategies                                  # the library, with mechanisms
 ```
-
-**The verification runs on Kaggle.** Both heavy backends need a host this repo's author did not have:
-
-| backend | requirement | why not locally |
-| --- | --- | --- |
-| PyRosetta | Linux | **no Windows wheel exists** — `pyrosetta-installer` aborts outright |
-| ESMFold | ~16 GB RAM, ideally a GPU | `esmfold_v1` bundles ESM-2 3B; CPU inference takes minutes |
-
-[**`notebooks/proteus_kaggle.ipynb`**](notebooks/proteus_kaggle.ipynb) is the full pipeline end to end — diagnose, run the loop, explain every mutation, adjudicate with Rosetta, check the refold, accumulate knowledge. Kaggle provides Linux, memory and a free GPU.
-
-To get the package onto Kaggle, either install from your repo, or build a wheel and upload it as a Dataset:
-
-```bash
-python -m build --wheel     # 68 KB, no compiled extensions
-```
-
-WSL2 also works for the Rosetta half if your machine will start it — on the development machine the VM would not (`HCS_E_CONNECTION_TIMEOUT`), which is a virtualisation setting rather than anything Proteus controls.
 
 ---
 
@@ -183,48 +169,18 @@ Every strategy was run in isolation on a validated de novo design, a prototype o
 
 ## Honest limitations
 
-- **The built-in scorer is a screening heuristic, not a force field.** `HeuristicScorer` exists so the engine runs and is testable without PyRosetta, and so the terms driving a decision are readable. Its terms are deliberately in tension (packing against aggregation, charge against burial) to resist the degenerate corners a single-term objective invites — but it is not a substitute for Rosetta, and improvements measured against it are *not* stability predictions.
-- **No repacking or minimisation in the default backend.** Sequences are threaded onto a fixed backbone. Real sidechain placement needs the Rosetta backend.
+- **The scorer is a screening heuristic, not a force field.** This is the limitation everything else is downstream of. `HeuristicScorer` keeps the terms driving a decision readable, and holds them in deliberate tension (packing against aggregation, charge against burial) to resist the degenerate corners a single-term objective invites. It correctly separates a score-hacked design from an experimentally validated one. It is still not a stability prediction.
+- **No repacking or minimisation.** Sequences are threaded onto a fixed backbone; sidechains are never rebuilt. Real packing needs an energy function and a packer, neither of which is here.
 - **The membrane estimator needs a plausible starting sequence.** It locates the bilayer from exposed hydrophobicity. If the design under repair has that backwards — exactly the case Proteus exists to fix — the estimate is unreliable. Supply an OPM-oriented structure, or an explicit `MembraneModel`. There is a test asserting this failure mode rather than hiding it.
 - **Credit assignment is joint.** When two mechanisms are applied together and the result improves, both are rewarded. Raw per-arm history is retained so the ambiguity can be analysed.
-- **The knowledge base is only as good as the objective.** It faithfully learns which mechanisms improve `HeuristicScorer`. Whether that tracks real stability is exactly the open question, and is why the Rosetta backend and a refold gate matter more than more strategies.
-- **The refold check is optional and off by default.** Pass `--refold` to run it. A run without it has not been verified, and the output says so.
-- **The Rosetta path has not been executed against a live PyRosetta install.** It was written on a machine without one. Its testable parts — energy-function selection, resfile generation, frozen-set handling, the import-failure path — are covered, but the PyRosetta API calls themselves (`AddMembraneMover`, `FastRelax`, `PackRotamersMover`) have not been run. Expect to debug it the first time. The same applies to `ESMFoldGate.predict`: the gate logic and RMSD maths are tested against a fake predictor, the ESMFold tensor handling is not.
+- **The knowledge base is only as good as the objective.** It faithfully learns which mechanisms improve `HeuristicScorer`. Whether that tracks real stability is the open question, and matters more than adding more strategies.
+- **Nothing here verifies the fold.** No refold check, no energy function. A run tells you the design improved on a readable heuristic; it does not tell you the sequence still folds. That gate was built, could not run on the development machine, and was removed rather than shipped untested — it is in git history at `350f04f`.
 
 ---
 
-## Verification
+## A negative result worth keeping
 
-A score improvement is a claim about the objective, not about the protein. Two optional backends turn it into something checkable.
-
-**Refold self-consistency** — fold the designed sequence with ESMFold and measure how far it lands from the backbone the strategies were reasoning about. This is the check everything else is conditional on: without it, nothing confirms the sequence still encodes the fold.
-
-```bash
-proteus run design.pdb --refold --refold-rmsd 2.0
-```
-
-```
-refold self-consistency check (ESMFold, this takes a while on CPU)...
-  PASS  scRMSD 1.34 A, pLDDT 88.2  (refolds to the intended backbone)
-```
-
-Without the dependency installed the run says so explicitly rather than omitting the field — an unverified run is reported as unverified.
-
-Every RMSD is superposed with Kabsch first, including a determinant correction so a mirror image cannot pass. This is not incidental: computing deviation as a raw coordinate difference, as the earlier prototype's MD did, measures rigid-body tumbling rather than shape change. A correct structure rotated 30° scores over 5 Å that way. The test suite asserts rotation and translation invariance directly.
-
-**Rosetta refinement** — real packing, minimisation and energy on the finalist.
-
-```bash
-proteus refine design.pdb --fasta best.fasta --out relaxed.pdb
-```
-
-Rosetta sits *after* the loop, not inside it. A FastRelax costs seconds to minutes per call, so the cheap objective narrows the field and Rosetta answers whether the survivor is genuinely better. Membrane proteins are scored with `franklin2019` rather than `ref2015` — the latter applies soluble burial physics to a bilayer — and an implicit membrane is attached, without which the membrane terms have no geometry to act on and the function degrades quietly toward a soluble one.
-
-Freezing is applied in **both** the resfile (`NATRO`, controlling identity) and the MoveMap (controlling coordinates). Either alone is insufficient; the prototype set neither.
-
-### Why not a cheaper sequence-likelihood gate
-
-Protein language model likelihood is the obvious lightweight substitute for a refold check — it needs a far smaller model and no structure prediction. It was tested and rejected.
+Protein language model likelihood looks like a cheap way to check a designed sequence is plausible. It was tested and rejected.
 
 Scoring 2A3D, an experimentally validated de novo three-helix bundle, against a synthetic poly-Trp/Tyr repeat with ESM-2 650M:
 
@@ -233,27 +189,18 @@ Scoring 2A3D, an experimentally validated de novo three-helix bundle, against a 
 | 2A3D (validated design) | −0.326 |
 | poly-WY junk | **−0.013** |
 
-The junk scores *better*. A repetitive sequence is trivially predictable — given `WWWWYYYY`, the next `W` is easy — so likelihood rewards low complexity. As a quality gate this would rank exactly the score-hacked aromatic designs Proteus exists to catch above a real one. (The measurement was a single-pass approximation rather than true masked pseudo-likelihood, but the direction is a documented failure mode and disqualifying either way.)
+The junk scores *better*. A repetitive sequence is trivially predictable — given `WWWWYYYY`, the next `W` is easy — so likelihood rewards low complexity. As a quality gate this would rank exactly the score-hacked aromatic designs this project exists to catch above a real one. (The measurement was a single-pass approximation rather than true masked pseudo-likelihood, but the direction is a documented failure mode and disqualifying either way.)
 
-Self-consistency needs structure, not sequence plausibility. There is no cheap version.
-
-### Installing the optional backends
-
-```bash
-pip install pyrosetta-installer && python -c "import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()"
-pip install "transformers>=4.35" accelerate     # ESMFold, ~2.6 GB on first use
-```
-
-PyRosetta is free for academic use and licence-gated for commercial use; it is not on PyPI. Both are handled by the Kaggle notebook.
+Verifying a design needs structure, not sequence plausibility. There is no cheap version, which is why nothing here claims to do it.
 
 ---
 
 ## Roadmap
 
-- Engine operating directly on Rosetta poses, so packing happens inside the loop rather than only at refinement
 - Strategy interaction map: which mechanisms are synergistic, which interfere
 - Per-strategy credit assignment — currently joint when mechanisms are co-applied
 - Cross-protein transfer evaluated properly: does a prior from similar folds measurably beat a cold start?
+- A real energy function behind the objective, which is the limitation everything else is downstream of
 
 ## Tests
 

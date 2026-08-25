@@ -18,8 +18,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-rosetta = []          # pyrosetta is licence-gated; install separately
-md = ["openmm>=8.0", "pdbfixer>=1.9"]
 dev = ["pytest>=7.4", "pytest-cov"]
 
 [project.scripts]

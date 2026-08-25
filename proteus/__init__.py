@@ -17,7 +17,6 @@ from .membrane import MembraneModel
 from .proposals import Proposal, Resolution, resolve, to_resfile
 from .strategies import REGISTRY, Strategy, register
 from .structure import Structure, from_arrays, from_pdb
-from .validate import NullGate, RefoldGate, RefoldResult, rmsd, superpose
 
 __version__ = "0.1.0"
 
@@ -31,11 +30,6 @@ __all__ = [
     "REGISTRY",
     "Strategy",
     "Structure",
-    "RefoldGate",
-    "RefoldResult",
-    "NullGate",
-    "rmsd",
-    "superpose",
     "from_arrays",
     "from_pdb",
     "register",
