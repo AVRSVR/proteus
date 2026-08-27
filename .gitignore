@@ -12,3 +12,4 @@ examples/best.fasta
 *.tmp.py
 dist_test/
 build/
+*.output

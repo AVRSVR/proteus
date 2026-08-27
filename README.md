@@ -53,16 +53,7 @@ Two mechanisms hold the edit down, and they do different jobs:
 - `--mutation-budget 0.15` — a hard ceiling, as a fraction of designable positions.
 - `--min-gain 0.0003` — the per-residue score improvement a mutation must deliver to be kept.
 
-The second is also what makes the tool **specific**. Gain-per-mutation turns out to separate a broken design from a sound one cleanly:
-
-| | gain per mutation | |
-| --- | --- | --- |
-| score-hacked design | 0.00057 | repaired |
-| experimentally validated design | 0.00016 | left alone |
-| natural protein (gp120) | 0.000016 | left alone |
-| natural protein (CDC42) | 0.000009 | left alone |
-
-An absolute floor near 0.0003 therefore repairs the first and leaves the rest untouched, which is the correct behaviour for a repair tool: evolved proteins are already near-optimal on these terms and there is nothing to gain by editing them.
+The second is also what makes the tool **specific** -- see "Does it know what to fix?" below for the 28-structure test of that claim. In short: gain-per-mutation separates a broken design from a sound one by 63x, which is why an absolute floor near 0.0003 repairs a broken design and leaves evolved proteins alone.
 
 Two earlier formulations failed, and both failures are worth recording. Expressing the price as `cost / n_residues` made it **size-dependent** — the same setting was six times cheaper per mutation on a 400-residue protein than on a 66-residue one, so large proteins accumulated dozens of marginal edits. Expressing it *relative* to the gain observed within each run **normalised away exactly the signal that distinguishes a broken protein from a sound one**, and every protein ran to the budget ceiling.
 
@@ -259,6 +250,28 @@ The junk scores *better*. A repetitive sequence is trivially predictable — giv
 Verifying a design needs structure, not sequence plausibility. There is no cheap version, which is why nothing here claims to do it.
 
 ---
+
+## Does it know what to fix?
+
+The mutation floor (`--min-gain`) is only defensible if gain-per-mutation actually separates broken designs from sound proteins -- otherwise it is an arbitrary knob. This was tested rather than assumed.
+
+```bash
+python benchmarks/specificity.py benchmarks/manifest.json
+```
+
+23 outputs from an earlier, defective design loop (`God_Particle_*`, the direct predecessor to this rewrite), one experimentally validated de novo design (2A3D), and four natural proteins (CDC42, PGK1, GRIN1, gp120). Proteus is not told which class anything belongs to; it only reports what it found.
+
+| class | n | median gain/mutation |
+| --- | --- | --- |
+| broken AI designs | 23 | 0.000458 |
+| validated design (2A3D) | 1 | 0.000158 |
+| natural proteins | 4 | 0.000007 |
+
+**63x separation** between the broken-design median and the natural-protein median, and a threshold exists (0.000282) that classifies this set with 100% accuracy. The default floor of 0.0003 sits almost exactly there, which is not a coincidence -- it was set from an earlier four-protein version of this same measurement.
+
+Two things keep this from being stronger evidence than it is, and both are worth stating plainly. All 23 broken designs came from one defective loop, most from the same starting backbone at different checkpoints -- they are highly correlated, closer to n=2 than n=23. And there is exactly one validated design, which is the case that actually matters most: a *good* design that the tool must learn to leave alone. A single point cannot establish where that boundary sits.
+
+The honest reading is not "specificity is proven." It is "a discriminating signal was found where none was designed in, the effect size is large, and the experiment that would actually test it -- many independent validated designs across different folds -- has not been run." That experiment is the natural next step for anyone extending this project, and `benchmarks/specificity.py` is built to make it a manifest edit rather than a rewrite.
 
 ## Roadmap
 

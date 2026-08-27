@@ -1,0 +1,254 @@
+[
+ {
+  "class": "designed",
+  "label": "God_Particle_Chai1_Best.pdb",
+  "n_residues": 73,
+  "start_score": 0.0009879401487961686,
+  "n_mutations": 11,
+  "raw_gain": 0.0031050963816121576,
+  "gain_per_mutation": 0.00028228148923746885
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best -233.75.pdb",
+  "n_residues": 66,
+  "start_score": -0.000701554553461013,
+  "n_mutations": 10,
+  "raw_gain": 0.003556019375232509,
+  "gain_per_mutation": 0.00035560193752325086
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best 1.pdb",
+  "n_residues": 66,
+  "start_score": 0.0085599663613378,
+  "n_mutations": 10,
+  "raw_gain": 0.0054818559138230406,
+  "gain_per_mutation": 0.0005481855913823041
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best hoe.pdb",
+  "n_residues": 66,
+  "start_score": -0.0009537305790976503,
+  "n_mutations": 10,
+  "raw_gain": 0.004452874582432572,
+  "gain_per_mutation": 0.0004452874582432572
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best v4.pdb",
+  "n_residues": 66,
+  "start_score": 0.004938996792319732,
+  "n_mutations": 10,
+  "raw_gain": 0.00831901463783576,
+  "gain_per_mutation": 0.0008319014637835759
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best,-200.02.pdb",
+  "n_residues": 66,
+  "start_score": 0.0034911507215679215,
+  "n_mutations": 10,
+  "raw_gain": 0.006045914583638257,
+  "gain_per_mutation": 0.0006045914583638257
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best,-233.75.pdb",
+  "n_residues": 66,
+  "start_score": -0.0009197363716428311,
+  "n_mutations": 10,
+  "raw_gain": 0.003337837557050691,
+  "gain_per_mutation": 0.0003337837557050691
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best,day 2.pdb",
+  "n_residues": 66,
+  "start_score": -0.0009537305790976503,
+  "n_mutations": 10,
+  "raw_gain": 0.004452874582432572,
+  "gain_per_mutation": 0.0004452874582432572
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best-189.pdb",
+  "n_residues": 66,
+  "start_score": 0.004587697843649355,
+  "n_mutations": 10,
+  "raw_gain": 0.008297949418009912,
+  "gain_per_mutation": 0.0008297949418009912
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best-191.pdb",
+  "n_residues": 66,
+  "start_score": 0.004585667630232642,
+  "n_mutations": 10,
+  "raw_gain": 0.009562076493595993,
+  "gain_per_mutation": 0.0009562076493595993
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best-198.pdb",
+  "n_residues": 66,
+  "start_score": 0.005061939173206345,
+  "n_mutations": 10,
+  "raw_gain": 0.009893784858705169,
+  "gain_per_mutation": 0.000989378485870517
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best-199.41.pdb",
+  "n_residues": 66,
+  "start_score": 0.0034172922605993877,
+  "n_mutations": 10,
+  "raw_gain": 0.0078624498904819,
+  "gain_per_mutation": 0.0007862449890481901
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best-199.pdb",
+  "n_residues": 66,
+  "start_score": 0.005204668157590856,
+  "n_mutations": 10,
+  "raw_gain": 0.010687229563038764,
+  "gain_per_mutation": 0.0010687229563038764
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best-231.pdb",
+  "n_residues": 66,
+  "start_score": -0.00046915144408709176,
+  "n_mutations": 10,
+  "raw_gain": 0.004581154514184764,
+  "gain_per_mutation": 0.00045811545141847637
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best-233.pdb",
+  "n_residues": 66,
+  "start_score": -0.0009197363716428311,
+  "n_mutations": 10,
+  "raw_gain": 0.003337837557050691,
+  "gain_per_mutation": 0.0003337837557050691
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Best2.pdb",
+  "n_residues": 66,
+  "start_score": 0.012472133047283738,
+  "n_mutations": 10,
+  "raw_gain": 0.0055457678451828986,
+  "gain_per_mutation": 0.0005545767845182898
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_Latest_Bestheehe.pdb",
+  "n_residues": 66,
+  "start_score": 3.7803455815593154e-06,
+  "n_mutations": 10,
+  "raw_gain": 0.004251965824817769,
+  "gain_per_mutation": 0.00042519658248177687
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_S145.pdb",
+  "n_residues": 71,
+  "start_score": 0.006458958212182167,
+  "n_mutations": 11,
+  "raw_gain": 0.005305162995708725,
+  "gain_per_mutation": 0.00048228754506442954
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_S155.pdb",
+  "n_residues": 71,
+  "start_score": 0.006348453861816992,
+  "n_mutations": 11,
+  "raw_gain": 0.004600850768037783,
+  "gain_per_mutation": 0.00041825916073070753
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_S156 (1)111.pdb",
+  "n_residues": 71,
+  "start_score": 0.006348453861816992,
+  "n_mutations": 11,
+  "raw_gain": 0.004600850768037783,
+  "gain_per_mutation": 0.00041825916073070753
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_S156 (2).pdb",
+  "n_residues": 71,
+  "start_score": 0.006348453861816992,
+  "n_mutations": 11,
+  "raw_gain": 0.004600850768037783,
+  "gain_per_mutation": 0.00041825916073070753
+ },
+ {
+  "class": "designed",
+  "label": "God_Particle_S156.pdb",
+  "n_residues": 71,
+  "start_score": 0.006348453861816992,
+  "n_mutations": 11,
+  "raw_gain": 0.004600850768037783,
+  "gain_per_mutation": 0.00041825916073070753
+ },
+ {
+  "class": "designed",
+  "label": "AI_Evolved_UltraStable",
+  "n_residues": 66,
+  "start_score": 0.037699146573161826,
+  "n_mutations": 10,
+  "raw_gain": 0.005670010061452298,
+  "gain_per_mutation": 0.0005670010061452298
+ },
+ {
+  "class": "validated",
+  "label": "2A3D",
+  "n_residues": 73,
+  "start_score": -0.0008054385236517616,
+  "n_mutations": 11,
+  "raw_gain": 0.0017399587337005528,
+  "gain_per_mutation": 0.00015817806670005024
+ },
+ {
+  "class": "natural",
+  "label": "CDC42",
+  "n_residues": 387,
+  "start_score": 0.0005458236014852815,
+  "n_mutations": 58,
+  "raw_gain": 0.0005233786882940559,
+  "gain_per_mutation": 9.023770487828549e-06
+ },
+ {
+  "class": "natural",
+  "label": "PGK1",
+  "n_residues": 416,
+  "start_score": 0.0002791236550737447,
+  "n_mutations": 62,
+  "raw_gain": 0.00022347279370423,
+  "gain_per_mutation": 3.6043998984553226e-06
+ },
+ {
+  "class": "natural",
+  "label": "GRIN1",
+  "n_residues": 743,
+  "start_score": 0.0008310664751900921,
+  "n_mutations": 111,
+  "raw_gain": 0.0006025829359652961,
+  "gain_per_mutation": 5.428675098786451e-06
+ },
+ {
+  "class": "natural",
+  "label": "gp120",
+  "n_residues": 297,
+  "start_score": 0.001425208800197736,
+  "n_mutations": 45,
+  "raw_gain": 0.0007187358668693728,
+  "gain_per_mutation": 1.597190815265273e-05
+ }
+]
