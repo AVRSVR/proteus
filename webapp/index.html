@@ -288,17 +288,23 @@
   <div class="card hidden" id="cardVerify">
     <h2>5 &middot; Verify the fold</h2>
     <p class="lead">Everything above is a hypothesis scored by a heuristic. Nothing so far
-      confirms the new sequence still folds to the same backbone. Fold it externally
-      (ColabFold, AlphaFold Server, ESMFold), then paste the prediction here to compare.</p>
+      confirms the new sequence still folds to the same backbone. Fold it and compare.</p>
+    <button class="act" onclick="autoFold()" id="foldBtn">Fold and compare automatically</button>
+    <div class="hint" style="margin-top:6px;">Sends the output sequence to the public ESMFold
+      service (free, no account, up to ~400 residues), then superposes the prediction onto your
+      input backbone. Takes a few seconds. It is a shared service and is sometimes down &mdash;
+      the manual route below always works.</div>
+    <div id="foldResult" style="margin-top:12px;"></div>
+    <details class="raw" style="margin-top:16px;"><summary>or fold elsewhere and upload the result</summary>
     <div class="upload" id="dropPred" onclick="document.getElementById('predFile').click()">
       <div class="big" id="predTitle">Choose predicted structure</div>
       <div class="small">from folding the output sequence above</div>
     </div>
     <input type="file" id="predFile" accept=".pdb,.cif" onchange="predChosen(this.files[0])">
-    <details class="raw"><summary>or paste prediction</summary>
-      <textarea id="predInput"></textarea></details>
+    <textarea id="predInput" placeholder="or paste the predicted PDB here"></textarea>
     <button class="act ghost" onclick="validateFold()" style="margin-top:10px;">Compare to original backbone</button>
     <div id="validateResult" style="margin-top:12px;"></div>
+    </details>
   </div>
 
 </div>
@@ -506,11 +512,48 @@ async function validateFold() {
       body: JSON.stringify({pdb: pdbText, chain: chainVal, predicted_pdb: pred})});
     const d = await r.json();
     if (d.error) { out.innerHTML = `<span style="color:var(--rust)">${d.error}</span>`; return; }
-    out.innerHTML = `<span class="badge ${d.passed?'pass':'fail'}">${d.passed?'PASS':'FAIL'}</span>
-      <span class="mono" style="margin-left:9px;">scRMSD ${d.rmsd.toFixed(2)} &#8491;</span>
-      ${d.plddt ? `<span class="mono" style="margin-left:9px;">pLDDT ${d.plddt.toFixed(1)}</span>` : ""}
-      <div class="hint" style="margin-top:5px;">${d.reason}</div>`;
+    out.innerHTML = verdictHtml(d);
   } catch(e) { out.innerHTML = "Request failed: " + e; }
+}
+
+function verdictHtml(d) {
+  return `<span class="badge ${d.passed?'pass':'fail'}">${d.passed?'PASS':'FAIL'}</span>
+    <span class="mono" style="margin-left:9px;">scRMSD ${d.rmsd.toFixed(2)} &#8491;</span>
+    ${d.plddt ? `<span class="mono" style="margin-left:9px;">pLDDT ${d.plddt.toFixed(1)}</span>` : ""}
+    <div class="hint" style="margin-top:5px;">${d.reason}</div>`;
+}
+
+let foldedPdb = "";
+async function autoFold() {
+  const seq = document.getElementById("bestSeq").textContent.trim();
+  const out = document.getElementById("foldResult");
+  const btn = document.getElementById("foldBtn");
+  if (!seq) { out.innerHTML = '<span class="hint">Run a stabilization first.</span>'; return; }
+  btn.disabled = true;
+  out.innerHTML = '<span class="hint">Folding with ESMFold and superposing&hellip;</span>';
+  try {
+    const r = await fetch("/api/fold", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({sequence: seq, pdb: pdbText, chain: chainVal})});
+    const d = await r.json();
+    if (d.error) { out.innerHTML = `<span style="color:var(--rust)">${d.error}</span>`; btn.disabled=false; return; }
+    foldedPdb = d.pdb || "";
+    if (d.compare_error) {
+      out.innerHTML = `<span style="color:var(--rust)">Folded, but could not compare: ${d.compare_error}</span>`;
+    } else if (d.passed !== undefined) {
+      out.innerHTML = verdictHtml(d) +
+        `<div style="margin-top:8px;"><button class="act ghost" onclick="downloadFold()">Download predicted structure</button></div>`;
+    }
+  } catch(e) { out.innerHTML = "Request failed: " + e; }
+  btn.disabled = false;
+}
+
+function downloadFold() {
+  if (!foldedPdb) return;
+  const blob = new Blob([foldedPdb], {type:"chemical/x-pdb"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "proteus_folded.pdb";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
 
 let libLoaded = false;
