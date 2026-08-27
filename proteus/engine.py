@@ -279,6 +279,7 @@ class Engine:
         min_gain_per_mutation: float = 0.0003,
         knowledge=None,
         protein: str = "",
+        allowed_strategies: list[str] | None = None,
         seed: int | None = None,
     ) -> None:
         self.ctx = ctx
@@ -339,6 +340,16 @@ class Engine:
         self.max_mutations = max(1, int(round(mutation_budget * n_designable)))
 
         available = [s.name for s in REGISTRY.for_context(ctx)]
+        if allowed_strategies is not None:
+            # Manual mode: the caller has chosen which mechanisms to apply, so
+            # the bandit selects only among those. Names not valid in this
+            # environment are dropped rather than silently failing later.
+            wanted = set(allowed_strategies)
+            available = [n for n in available if n in wanted]
+            if not available:
+                raise ValueError(
+                    "none of the requested strategies apply here: "
+                    f"{sorted(wanted)}")
 
         # If a knowledge base is supplied, describe this protein and pull
         # forward what worked on structurally similar ones. The prior is a

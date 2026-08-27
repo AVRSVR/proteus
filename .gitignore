@@ -13,3 +13,4 @@ examples/best.fasta
 dist_test/
 build/
 *.output
+webapp/server.log

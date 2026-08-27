@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proteus — Protein Stabilization Workbench</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1b2119;
+    --ink-soft: #4c5a48;
+    --bark: #3d4a37;
+    --moss: #4f6b45;
+    --moss-lt: #6d8a5f;
+    --lichen: #93ad7f;
+    --paper: #f6f5ef;
+    --card: #fffefa;
+    --line: #d5d3c4;
+    --line-soft: #e7e5d9;
+    --amber: #9a6f2c;
+    --rust: #9c4a34;
+    --cobalt: #2f5d78;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: "IBM Plex Sans", -apple-system, sans-serif;
+    font-size: 14px; line-height: 1.55;
+  }
+  code, .mono, pre { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+
+  header {
+    border-bottom: 1px solid var(--line);
+    background: var(--card);
+    padding: 20px 32px 0;
+  }
+  .hd-top { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  header h1 {
+    margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.2px;
+    color: var(--moss);
+  }
+  header .sub {
+    font-family: "IBM Plex Serif", Georgia, serif; font-style: italic;
+    color: var(--ink-soft); font-size: 13.5px;
+  }
+  nav { display: flex; gap: 2px; margin-top: 16px; }
+  nav button {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    padding: 8px 16px; font-family: inherit; font-size: 13.5px; font-weight: 500;
+    color: var(--ink-soft); cursor: pointer; margin: 0;
+  }
+  nav button:hover { color: var(--moss); background: none; }
+  nav button.active { color: var(--moss); border-bottom-color: var(--moss); }
+
+  main { max-width: 1080px; margin: 0 auto; padding: 26px 32px 70px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+    padding: 20px 22px; margin-bottom: 18px;
+  }
+  .card > h2 {
+    margin: 0 0 4px; font-size: 12px; font-weight: 600; letter-spacing: 0.8px;
+    text-transform: uppercase; color: var(--moss);
+  }
+  .card > .lead {
+    margin: 0 0 16px; color: var(--ink-soft); font-size: 13px;
+    border-bottom: 1px solid var(--line-soft); padding-bottom: 12px;
+  }
+  label { display: block; font-size: 12.5px; font-weight: 500; color: var(--bark); margin-bottom: 3px; }
+  .hint { font-size: 11.5px; color: #7d8878; font-weight: 400; margin-top: 2px; line-height: 1.4; }
+  textarea, input[type=text], input[type=number], select {
+    width: 100%; font-family: "IBM Plex Mono", monospace; font-size: 12px;
+    border: 1px solid var(--line); border-radius: 3px; padding: 7px 9px;
+    background: #fff; color: var(--ink);
+  }
+  textarea { height: 110px; resize: vertical; }
+  input:focus, textarea:focus, select:focus { outline: 2px solid var(--lichen); outline-offset: -1px; }
+  .grid { display: grid; gap: 14px; }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .field { margin-bottom: 12px; }
+
+  button.act {
+    font-family: inherit; font-size: 13px; font-weight: 500; padding: 8px 18px;
+    background: var(--moss); color: #fff; border: none; border-radius: 3px;
+    cursor: pointer;
+  }
+  button.act:hover { background: var(--bark); }
+  button.act.ghost { background: #fff; color: var(--moss); border: 1px solid var(--moss); }
+  button.act.ghost:hover { background: #f0f3ec; }
+  button.act:disabled { background: #b7bcb2; cursor: default; }
+
+  .upload {
+    border: 1.5px dashed var(--line); border-radius: 4px; padding: 16px;
+    text-align: center; background: #fcfcf7; cursor: pointer; margin-bottom: 10px;
+  }
+  .upload:hover { border-color: var(--lichen); background: #f6f8f2; }
+  .upload .big { font-size: 13px; font-weight: 500; color: var(--bark); }
+  .upload .small { font-size: 11.5px; color: #7d8878; margin-top: 3px; }
+  .upload.loaded { border-color: var(--moss); border-style: solid; background: #f2f6ee; }
+  #fileInput { display: none; }
+  details.raw > summary {
+    cursor: pointer; font-size: 12px; color: var(--ink-soft); margin-bottom: 6px;
+  }
+
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 4px; }
+  .mode {
+    border: 1.5px solid var(--line); border-radius: 4px; padding: 13px 15px;
+    cursor: pointer; background: #fff;
+  }
+  .mode:hover { border-color: var(--lichen); }
+  .mode.on { border-color: var(--moss); background: #f2f6ee; }
+  .mode .t { font-weight: 600; font-size: 13px; color: var(--bark); }
+  .mode .d { font-size: 11.5px; color: var(--ink-soft); margin-top: 4px; line-height: 1.45; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; padding: 6px 8px; font-size: 11px; text-transform: uppercase;
+       letter-spacing: 0.5px; color: var(--ink-soft); border-bottom: 1.5px solid var(--line); }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tr:hover td { background: #fafaf4; }
+
+  .terms { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px,1fr)); gap: 7px; }
+  .term { background: #fff; border: 1px solid var(--line-soft); border-radius: 3px; padding: 7px 9px; }
+  .term .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: #7d8878; }
+  .term .v { font-family: "IBM Plex Mono", monospace; font-size: 14px; font-weight: 500; margin-top: 1px; }
+  .term .v.pos { color: var(--rust); }
+  .term .v.neg { color: var(--moss); }
+
+  .strat {
+    border: 1px solid var(--line-soft); border-left: 3px solid var(--lichen);
+    border-radius: 3px; padding: 9px 11px; margin-bottom: 7px; background: #fff;
+  }
+  .strat.pick { cursor: pointer; }
+  .strat.pick:hover { border-left-color: var(--moss); background: #fafcf8; }
+  .strat.sel { border-left-color: var(--moss); background: #f2f6ee; }
+  .strat .hdr { display: flex; align-items: baseline; gap: 8px; }
+  .strat .nm { font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 12.5px; color: var(--bark); }
+  .strat .ct { font-size: 11px; color: #7d8878; }
+  .strat .mech { font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
+  .strat .gate {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--cobalt);
+    background: #f2f6f8; border-radius: 2px; padding: 4px 7px; margin-top: 6px;
+  }
+  .fam { margin-bottom: 22px; }
+  .fam h3 {
+    margin: 0 0 3px; font-size: 13px; font-weight: 600; color: var(--moss);
+  }
+  .fam .note { font-size: 12px; color: var(--ink-soft); margin-bottom: 10px; }
+
+  .seq { word-break: break-all; font-family: "IBM Plex Mono", monospace; font-size: 11.5px;
+         background: #fff; border: 1px solid var(--line-soft); padding: 9px; border-radius: 3px;
+         line-height: 1.7; }
+  .seq .ch { background: #f3ddd6; color: var(--rust); font-weight: 600; }
+  .stats { display: flex; gap: 22px; flex-wrap: wrap; margin-bottom: 14px; }
+  .stat .n { font-family: "IBM Plex Mono", monospace; font-size: 19px; font-weight: 600; color: var(--bark); }
+  .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #7d8878; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 3px; font-size: 11.5px; font-weight: 500; }
+  .badge.pass { background: #e2ecd8; color: var(--moss); }
+  .badge.fail { background: #f2ddd6; color: var(--rust); }
+  #status { font-size: 12.5px; color: var(--ink-soft); margin-top: 11px; min-height: 17px; }
+  #status.err { color: var(--rust); }
+  .hidden { display: none; }
+  .arrow { color: #a8b09f; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hd-top">
+    <h1>Proteus</h1>
+    <span class="sub">mechanism-level protein stabilization</span>
+  </div>
+  <nav>
+    <button id="tabWork" class="active" onclick="showTab('work')">Workbench</button>
+    <button id="tabLib" onclick="showTab('lib')">Strategy Library</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ============ WORKBENCH ============ -->
+<div id="viewWork">
+
+  <div class="card">
+    <h2>1 &middot; Structure</h2>
+    <p class="lead">Load a PDB or mmCIF file. Proteus reads the backbone geometry and the
+      sequence threaded onto it &mdash; it proposes point mutations on a fixed backbone,
+      it does not build new folds.</p>
+
+    <div class="upload" id="dropZone" onclick="document.getElementById('fileInput').click()">
+      <div class="big" id="upTitle">Choose a structure file</div>
+      <div class="small" id="upSub">.pdb or .cif &mdash; or drag one here</div>
+    </div>
+    <input type="file" id="fileInput" accept=".pdb,.cif,.ent,.txt" onchange="fileChosen(this.files[0])">
+
+    <details class="raw"><summary>or paste file contents directly</summary>
+      <textarea id="pdbInput" placeholder="ATOM      1  N   MET A   1      ..."
+                oninput="markPasted()"></textarea>
+    </details>
+
+    <div class="grid g3" style="margin-top:14px;">
+      <div class="field">
+        <label for="chain">Chain</label>
+        <input type="text" id="chain" placeholder="e.g. A — blank = all">
+        <div class="hint">Restrict to one chain. Leave blank to read every chain as
+          a single unit (interfaces get no special treatment).</div>
+      </div>
+      <div class="field">
+        <label for="freeze">Freeze residues</label>
+        <input type="text" id="freeze" placeholder="e.g. 1-10,47-53">
+        <div class="hint">Positions held fixed &mdash; a binding site, active site or
+          epitope. No strategy can touch these; guaranteed, not best-effort.</div>
+      </div>
+      <div class="field">
+        <label for="generations">Generations</label>
+        <input type="number" id="generations" value="40" min="5" max="200">
+        <div class="hint">How many proposal rounds to try. Each round picks mechanisms,
+          applies them, and keeps the result only if it improves the score.
+          More rounds = more search, slower. 40 is usually plenty.</div>
+      </div>
+      <div class="field">
+        <label>Environment</label>
+        <select id="membrane">
+          <option value="">Soluble (default)</option>
+          <option value="1">Membrane-embedded</option>
+        </select>
+        <div class="hint">Not cosmetic. Inside a bilayer the burial rules
+          <em>invert</em> &mdash; lipid-facing positions want hydrophobic residues,
+          and the interior tolerates polar. Choosing wrong makes the tool
+          confidently do the opposite of the right thing.</div>
+      </div>
+    </div>
+
+    <button class="act" onclick="analyze()">Analyze structure</button>
+    <div id="status"></div>
+  </div>
+
+  <div class="card hidden" id="cardDiag">
+    <h2>2 &middot; Diagnosis</h2>
+    <p class="lead">Nothing has been changed yet. This is what Proteus sees: the score
+      broken into its terms, and which mechanisms find something to act on.</p>
+    <div class="stats" id="diagStats"></div>
+    <div style="margin-bottom:6px;"><strong style="font-size:12.5px;">Score terms</strong>
+      <span class="hint" style="display:inline;">&mdash; lower is better; positive values are what the run will try to reduce</span></div>
+    <div class="terms" id="termGrid"></div>
+    <div style="margin:16px 0 6px;"><strong style="font-size:12.5px;">Applicable mechanisms</strong>
+      <span class="hint" style="display:inline;">&mdash; a mechanism with zero sites is never sampled</span></div>
+    <div id="diagStrats"></div>
+  </div>
+
+  <div class="card hidden" id="cardMode">
+    <h2>3 &middot; How should it choose?</h2>
+    <p class="lead">Two ways to run. The difference is who decides which mechanisms get tried.</p>
+    <div class="modes">
+      <div class="mode on" id="modeAuto" onclick="setMode('auto')">
+        <div class="t">Autonomous</div>
+        <div class="d">A bandit picks mechanisms, learns from what worked on this
+          protein, and keeps a running leaderboard. Use this when you don't know
+          what's wrong.</div>
+      </div>
+      <div class="mode" id="modeManual" onclick="setMode('manual')">
+        <div class="t">Guided</div>
+        <div class="d">You choose the mechanisms from the library; only those are
+          applied. Use this when you have a hypothesis &mdash; "this thing aggregates,
+          fix the surface".</div>
+      </div>
+    </div>
+    <div id="pickWrap" class="hidden" style="margin-top:14px;">
+      <div style="margin-bottom:7px;"><strong style="font-size:12.5px;">Select mechanisms</strong>
+        <span class="hint" style="display:inline;">&mdash; click to toggle; only ones applicable to this structure are shown</span></div>
+      <div id="pickList"></div>
+    </div>
+    <button class="act" onclick="runStabilize()" id="runBtn" style="margin-top:14px;">Run stabilization</button>
+  </div>
+
+  <div class="card hidden" id="cardResult">
+    <h2>4 &middot; Result</h2>
+    <p class="lead" id="resultLead"></p>
+    <div class="stats" id="runStats"></div>
+    <div style="margin-bottom:6px;"><strong style="font-size:12.5px;">Mutations</strong></div>
+    <table>
+      <thead><tr><th style="width:70px;">Position</th><th style="width:110px;">Change</th><th>Mechanism and reason</th></tr></thead>
+      <tbody id="changeTable"></tbody>
+    </table>
+    <div id="lbWrap" style="margin-top:18px;"></div>
+    <div style="margin:16px 0 6px;"><strong style="font-size:12.5px;">Output sequence</strong>
+      <span class="hint" style="display:inline;">&mdash; changed positions highlighted</span></div>
+    <div class="seq" id="bestSeq"></div>
+  </div>
+
+  <div class="card hidden" id="cardVerify">
+    <h2>5 &middot; Verify the fold</h2>
+    <p class="lead">Everything above is a hypothesis scored by a heuristic. Nothing so far
+      confirms the new sequence still folds to the same backbone. Fold it externally
+      (ColabFold, AlphaFold Server, ESMFold), then paste the prediction here to compare.</p>
+    <div class="upload" id="dropPred" onclick="document.getElementById('predFile').click()">
+      <div class="big" id="predTitle">Choose predicted structure</div>
+      <div class="small">from folding the output sequence above</div>
+    </div>
+    <input type="file" id="predFile" accept=".pdb,.cif" onchange="predChosen(this.files[0])">
+    <details class="raw"><summary>or paste prediction</summary>
+      <textarea id="predInput"></textarea></details>
+    <button class="act ghost" onclick="validateFold()" style="margin-top:10px;">Compare to original backbone</button>
+    <div id="validateResult" style="margin-top:12px;"></div>
+  </div>
+
+</div>
+
+<!-- ============ LIBRARY ============ -->
+<div id="viewLib" class="hidden">
+  <div class="card">
+    <h2>Strategy Library</h2>
+    <p class="lead">33 mechanisms, grouped by where they come from. Each carries the
+      biophysics it exploits and the exact rule that decides where it applies &mdash;
+      a mechanism that fires everywhere tells the selector nothing, so every one is gated.</p>
+    <div id="libContent">Loading&hellip;</div>
+  </div>
+</div>
+
+</main>
+
+<script>
+let pdbText = "", chainVal = "", memVal = false;
+let mode = "auto", picked = new Set(), applicable = [];
+
+function showTab(t) {
+  document.getElementById("viewWork").classList.toggle("hidden", t !== "work");
+  document.getElementById("viewLib").classList.toggle("hidden", t !== "lib");
+  document.getElementById("tabWork").classList.toggle("active", t === "work");
+  document.getElementById("tabLib").classList.toggle("active", t === "lib");
+  if (t === "lib") loadLibrary();
+}
+
+function setStatus(m, err) {
+  const el = document.getElementById("status");
+  el.textContent = m; el.className = err ? "err" : "";
+}
+
+function fileChosen(f) {
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = e => {
+    pdbText = e.target.result;
+    document.getElementById("pdbInput").value = pdbText;
+    const z = document.getElementById("dropZone");
+    z.classList.add("loaded");
+    document.getElementById("upTitle").textContent = f.name;
+    document.getElementById("upSub").textContent =
+      (pdbText.split("\n").filter(l => l.startsWith("ATOM")).length) + " atom records loaded";
+    setStatus("");
+  };
+  r.readAsText(f);
+}
+function markPasted() {
+  pdbText = document.getElementById("pdbInput").value;
+  if (pdbText.trim()) {
+    document.getElementById("dropZone").classList.add("loaded");
+    document.getElementById("upTitle").textContent = "Pasted structure";
+    document.getElementById("upSub").textContent =
+      pdbText.split("\n").filter(l => l.startsWith("ATOM")).length + " atom records";
+  }
+}
+const dz = document.getElementById("dropZone");
+["dragover","dragenter"].forEach(ev => dz.addEventListener(ev, e => {
+  e.preventDefault(); dz.style.borderColor = "#6d8a5f"; }));
+dz.addEventListener("dragleave", () => dz.style.borderColor = "");
+dz.addEventListener("drop", e => {
+  e.preventDefault(); dz.style.borderColor = "";
+  if (e.dataTransfer.files[0]) fileChosen(e.dataTransfer.files[0]);
+});
+
+function predChosen(f) {
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = e => {
+    document.getElementById("predInput").value = e.target.result;
+    document.getElementById("dropPred").classList.add("loaded");
+    document.getElementById("predTitle").textContent = f.name;
+  };
+  r.readAsText(f);
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById("modeAuto").classList.toggle("on", m === "auto");
+  document.getElementById("modeManual").classList.toggle("on", m === "manual");
+  document.getElementById("pickWrap").classList.toggle("hidden", m !== "manual");
+}
+
+async function analyze() {
+  pdbText = pdbText || document.getElementById("pdbInput").value;
+  if (!pdbText.trim()) { setStatus("Load a structure file first.", true); return; }
+  chainVal = document.getElementById("chain").value.trim();
+  memVal = document.getElementById("membrane").value === "1";
+  setStatus("Reading structure and running diagnosis…");
+  try {
+    const r = await fetch("/api/analyze", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({pdb: pdbText, chain: chainVal, membrane: memVal})});
+    const d = await r.json();
+    if (d.error) { setStatus(d.error, true); return; }
+    setStatus("");
+    applicable = d.strategies;
+    picked = new Set();
+
+    document.getElementById("cardDiag").classList.remove("hidden");
+    document.getElementById("cardMode").classList.remove("hidden");
+    document.getElementById("cardResult").classList.add("hidden");
+    document.getElementById("cardVerify").classList.add("hidden");
+
+    document.getElementById("diagStats").innerHTML =
+      stat(d.n_residues, "residues") +
+      stat(d.score.toFixed(4), "score / residue") +
+      stat(d.strategies.length, "mechanisms apply") +
+      stat(memVal ? "membrane" : "soluble", "environment");
+
+    const tg = document.getElementById("termGrid"); tg.innerHTML = "";
+    for (const [k,v] of Object.entries(d.terms)) {
+      const cls = v > 0.0005 ? "pos" : (v < -0.0005 ? "neg" : "");
+      tg.innerHTML += `<div class="term"><div class="k">${k.replace(/_/g," ")}</div>
+        <div class="v ${cls}">${v.toFixed(4)}</div></div>`;
+    }
+
+    const ds = document.getElementById("diagStrats"); ds.innerHTML = "";
+    const pl = document.getElementById("pickList"); pl.innerHTML = "";
+    d.strategies.forEach(s => {
+      ds.innerHTML += `<div class="strat"><div class="hdr"><span class="nm">${s.name}</span>
+        <span class="ct">${s.sites} site${s.sites===1?"":"s"}</span></div>
+        <div class="mech">${s.mechanism}</div></div>`;
+      pl.innerHTML += `<div class="strat pick" id="pk_${s.name}" onclick="togglePick('${s.name}')">
+        <div class="hdr"><span class="nm">${s.name}</span>
+        <span class="ct">${s.sites} site${s.sites===1?"":"s"}</span></div></div>`;
+    });
+    document.getElementById("cardDiag").scrollIntoView({behavior:"smooth", block:"start"});
+  } catch(e) { setStatus("Request failed: " + e, true); }
+}
+
+function stat(n, l) { return `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`; }
+
+function togglePick(n) {
+  if (picked.has(n)) picked.delete(n); else picked.add(n);
+  document.getElementById("pk_"+n).classList.toggle("sel", picked.has(n));
+}
+
+async function runStabilize() {
+  if (mode === "manual" && picked.size === 0) {
+    setStatus("Select at least one mechanism, or switch to Autonomous.", true); return;
+  }
+  const btn = document.getElementById("runBtn");
+  btn.disabled = true; setStatus("Running… this takes a few seconds.");
+  try {
+    const body = {pdb: pdbText, chain: chainVal, membrane: memVal,
+      freeze: document.getElementById("freeze").value.trim(),
+      generations: document.getElementById("generations").value};
+    if (mode === "manual") body.strategies = [...picked];
+    const r = await fetch("/api/run", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (d.error) { setStatus(d.error, true); btn.disabled = false; return; }
+    setStatus("");
+    document.getElementById("cardResult").classList.remove("hidden");
+    document.getElementById("cardVerify").classList.remove("hidden");
+
+    document.getElementById("resultLead").textContent = d.n_mutations === 0
+      ? "No mutations met the improvement threshold. For an already-sound protein this is the correct answer, not a failure."
+      : `Ran in ${d.mode} mode. Every change below names the mechanism that caused it.`;
+
+    document.getElementById("runStats").innerHTML =
+      stat(d.n_mutations, "mutations") +
+      stat((d.identity*100).toFixed(1)+"%", "identity retained") +
+      stat(d.improvement.toFixed(4), "improvement / residue");
+
+    const tb = document.getElementById("changeTable"); tb.innerHTML = "";
+    if (!d.changes.length) tb.innerHTML = `<tr><td colspan="3" style="color:#7d8878;">No changes.</td></tr>`;
+    d.changes.forEach(c => {
+      tb.innerHTML += `<tr><td class="mono">${c.pos}</td>
+        <td class="mono">${c.from} <span class="arrow">&rarr;</span> <strong>${c.to}</strong></td>
+        <td>${c.why || "&mdash;"}</td></tr>`;
+    });
+
+    const lw = document.getElementById("lbWrap");
+    if (d.leaderboard && d.leaderboard.length) {
+      let h = `<div style="margin-bottom:6px;"><strong style="font-size:12.5px;">Leaderboard</strong>
+        <span class="hint" style="display:inline;">&mdash; what the run learned about this protein</span></div>
+        <table><thead><tr><th>Mechanism</th><th>Tried</th><th>Win rate</th><th>Mean reward</th></tr></thead><tbody>`;
+      d.leaderboard.slice(0,8).forEach(a => {
+        h += `<tr><td class="mono">${a.name}</td><td>${a.pulls}</td>
+          <td>${(a.win_rate*100).toFixed(0)}%</td><td class="mono">${a.mean_reward.toFixed(3)}</td></tr>`;
+      });
+      lw.innerHTML = h + "</tbody></table>";
+    } else lw.innerHTML = "";
+
+    const changed = new Set(d.changes.map(c => c.pos));
+    document.getElementById("bestSeq").innerHTML = [...d.best_sequence].map((ch,i) =>
+      changed.has(i+1) ? `<span class="ch">${ch}</span>` : ch).join("");
+    document.getElementById("cardResult").scrollIntoView({behavior:"smooth", block:"start"});
+  } catch(e) { setStatus("Request failed: " + e, true); }
+  btn.disabled = false;
+}
+
+async function validateFold() {
+  const pred = document.getElementById("predInput").value.trim();
+  const out = document.getElementById("validateResult");
+  if (!pred) { out.innerHTML = '<span class="hint">Load a predicted structure first.</span>'; return; }
+  out.innerHTML = '<span class="hint">Superposing and measuring…</span>';
+  try {
+    const r = await fetch("/api/validate", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({pdb: pdbText, chain: chainVal, predicted_pdb: pred})});
+    const d = await r.json();
+    if (d.error) { out.innerHTML = `<span style="color:var(--rust)">${d.error}</span>`; return; }
+    out.innerHTML = `<span class="badge ${d.passed?'pass':'fail'}">${d.passed?'PASS':'FAIL'}</span>
+      <span class="mono" style="margin-left:9px;">scRMSD ${d.rmsd.toFixed(2)} &#8491;</span>
+      ${d.plddt ? `<span class="mono" style="margin-left:9px;">pLDDT ${d.plddt.toFixed(1)}</span>` : ""}
+      <div class="hint" style="margin-top:5px;">${d.reason}</div>`;
+  } catch(e) { out.innerHTML = "Request failed: " + e; }
+}
+
+let libLoaded = false;
+async function loadLibrary() {
+  if (libLoaded) return;
+  const el = document.getElementById("libContent");
+  try {
+    const d = await (await fetch("/api/strategies")).json();
+    const byFam = {};
+    d.strategies.forEach(s => { (byFam[s.family] = byFam[s.family] || []).push(s); });
+    const titles = {core:"Core stability", liability:"Chemical liabilities",
+      thermophile:"Thermophile-inspired", packing:"Pairwise interactions & sheet architecture",
+      membrane:"Membrane"};
+    let h = "";
+    for (const [fam, list] of Object.entries(byFam)) {
+      h += `<div class="fam"><h3>${titles[fam]||fam} <span class="ct" style="font-weight:400;color:#7d8878;">(${list.length})</span></h3>
+        <div class="note">${d.notes[fam]||""}</div>`;
+      list.forEach(s => {
+        h += `<div class="strat"><div class="hdr"><span class="nm">${s.name}</span>
+          <span class="ct">${s.environments.join(" / ")}</span></div>
+          <div class="mech">${s.mechanism}</div>
+          <div class="gate"><strong>applies where:</strong> ${s.gate}</div></div>`;
+      });
+      h += "</div>";
+    }
+    el.innerHTML = h; libLoaded = true;
+  } catch(e) { el.innerHTML = "Could not load library: " + e; }
+}
+</script>
+</body>
+</html>
