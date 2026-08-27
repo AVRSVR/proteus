@@ -1,6 +1,7 @@
 """Minimal local server for the Proteus frontend. No auth, localhost only."""
 import sys, tempfile, traceback
-import time, urllib.request, urllib.error
+import threading, time, urllib.request, urllib.error
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -235,6 +236,95 @@ def fold_with_esmfold(sequence: str, timeout: int = 120,
     return None, (f"ESMFold did not respond after {attempts} attempts ({last}). "
                   f"It is a free shared service and goes down regularly -- "
                   f"fold externally and upload the result instead.")
+
+
+# --------------------------------------------------------------- fold jobs
+#
+# The upstream service fails in bursts, so a single synchronous request is a
+# coin flip. Folding therefore runs as a background job that keeps retrying
+# for several minutes while the page stays usable, and the client polls. This
+# turns an unreliable dependency into a slow but dependable one.
+FOLD_JOBS: dict[str, dict] = {}
+FOLD_JOB_LOCK = threading.Lock()
+FOLD_MAX_MINUTES = 8
+
+
+def _fold_worker(job_id: str, sequence: str, reference_pdb: str,
+                 chain: str | None, rmsd_cutoff: float) -> None:
+    deadline = time.time() + FOLD_MAX_MINUTES * 60
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        with FOLD_JOB_LOCK:
+            FOLD_JOBS[job_id]["attempt"] = attempt
+        pdb_text, err = fold_with_esmfold(sequence, attempts=1)
+        if pdb_text:
+            result = {"state": "done", "pdb": pdb_text, "attempt": attempt}
+            if reference_pdb:
+                try:
+                    _, reference = _load(reference_pdb, chain, False)
+                    tmp = Path(tempfile.gettempdir()) / f"proteus_fold_{job_id}.pdb"
+                    tmp.write_text(pdb_text, encoding="utf-8")
+                    predicted = from_pdb(str(tmp))
+                    if len(predicted) != len(reference):
+                        result["compare_error"] = (
+                            f"folded {len(predicted)} residues but the reference has "
+                            f"{len(reference)}")
+                    else:
+                        check = PredictedStructureGate(
+                            predicted, rmsd_cutoff=rmsd_cutoff
+                        ).check(predicted.sequence, reference)
+                        result.update({"passed": check.passed, "rmsd": check.sc_rmsd,
+                                       "plddt": check.plddt, "reason": check.reason})
+                except Exception as exc:
+                    result["compare_error"] = str(exc)
+            with FOLD_JOB_LOCK:
+                FOLD_JOBS[job_id] = result
+            return
+        # Non-retryable errors come back worded differently; stop on those.
+        if err and "rejected the request" in err:
+            with FOLD_JOB_LOCK:
+                FOLD_JOBS[job_id] = {"state": "failed", "error": err}
+            return
+        time.sleep(6)
+
+    with FOLD_JOB_LOCK:
+        FOLD_JOBS[job_id] = {
+            "state": "failed",
+            "error": (f"ESMFold did not respond in {FOLD_MAX_MINUTES} minutes "
+                      f"({attempt} attempts). The free service is in a bad "
+                      f"patch -- fold externally and upload the result."),
+        }
+
+
+@app.post("/api/fold/start")
+def fold_start():
+    data = request.get_json(force=True)
+    sequence = (data.get("sequence") or "").strip()
+    if not sequence:
+        return jsonify({"error": "no sequence supplied"}), 400
+    if len(sequence) > ESMFOLD_MAX_LEN:
+        return jsonify({"error": f"sequence is {len(sequence)} residues; the public "
+                                 f"ESMFold endpoint accepts up to about "
+                                 f"{ESMFOLD_MAX_LEN}. Fold externally instead."}), 400
+
+    job_id = uuid.uuid4().hex[:12]
+    with FOLD_JOB_LOCK:
+        FOLD_JOBS[job_id] = {"state": "running", "attempt": 0}
+    threading.Thread(
+        target=_fold_worker, daemon=True,
+        args=(job_id, sequence, data.get("pdb") or "", data.get("chain"),
+              float(data.get("rmsd", 2.0)))).start()
+    return jsonify({"job": job_id, "max_minutes": FOLD_MAX_MINUTES})
+
+
+@app.get("/api/fold/status/<job_id>")
+def fold_status(job_id):
+    with FOLD_JOB_LOCK:
+        job = FOLD_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"error": "unknown job"}), 404
+    return jsonify(job)
 
 
 @app.post("/api/fold")

@@ -523,29 +523,49 @@ function verdictHtml(d) {
     <div class="hint" style="margin-top:5px;">${d.reason}</div>`;
 }
 
-let foldedPdb = "";
+let foldedPdb = "", foldPoll = null;
 async function autoFold() {
   const seq = document.getElementById("bestSeq").textContent.trim();
   const out = document.getElementById("foldResult");
   const btn = document.getElementById("foldBtn");
   if (!seq) { out.innerHTML = '<span class="hint">Run a stabilization first.</span>'; return; }
   btn.disabled = true;
-  out.innerHTML = '<span class="hint">Folding with ESMFold and superposing&hellip;</span>';
+  const t0 = Date.now();
+  out.innerHTML = '<span class="hint">Starting fold job&hellip;</span>';
   try {
-    const r = await fetch("/api/fold", {method:"POST",
+    const r = await fetch("/api/fold/start", {method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({sequence: seq, pdb: pdbText, chain: chainVal})});
     const d = await r.json();
     if (d.error) { out.innerHTML = `<span style="color:var(--rust)">${d.error}</span>`; btn.disabled=false; return; }
-    foldedPdb = d.pdb || "";
-    if (d.compare_error) {
-      out.innerHTML = `<span style="color:var(--rust)">Folded, but could not compare: ${d.compare_error}</span>`;
-    } else if (d.passed !== undefined) {
-      out.innerHTML = verdictHtml(d) +
-        `<div style="margin-top:8px;"><button class="act ghost" onclick="downloadFold()">Download predicted structure</button></div>`;
-    }
-  } catch(e) { out.innerHTML = "Request failed: " + e; }
-  btn.disabled = false;
+
+    if (foldPoll) clearInterval(foldPoll);
+    foldPoll = setInterval(async () => {
+      try {
+        const s = await (await fetch("/api/fold/status/" + d.job)).json();
+        const secs = Math.round((Date.now() - t0) / 1000);
+        if (s.state === "running") {
+          out.innerHTML = `<span class="hint">Folding&hellip; attempt ${s.attempt},
+            ${secs}s elapsed. The public service fails in bursts, so this retries
+            for up to ${d.max_minutes} minutes. You can keep using the page.</span>`;
+          return;
+        }
+        clearInterval(foldPoll); foldPoll = null; btn.disabled = false;
+        if (s.state === "failed") {
+          out.innerHTML = `<span style="color:var(--rust)">${s.error}</span>`; return;
+        }
+        foldedPdb = s.pdb || "";
+        if (s.compare_error) {
+          out.innerHTML = `<span style="color:var(--rust)">Folded, but could not compare: ${s.compare_error}</span>`;
+        } else {
+          out.innerHTML = verdictHtml(s) +
+            `<div class="hint" style="margin-top:4px;">succeeded on attempt ${s.attempt} after ${secs}s</div>
+             <div style="margin-top:8px;"><button class="act ghost" onclick="downloadFold()">Download predicted structure</button></div>`;
+        }
+      } catch(e) { clearInterval(foldPoll); foldPoll=null; btn.disabled=false;
+                   out.innerHTML = "Polling failed: " + e; }
+    }, 3000);
+  } catch(e) { out.innerHTML = "Request failed: " + e; btn.disabled = false; }
 }
 
 function downloadFold() {
