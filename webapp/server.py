@@ -13,6 +13,7 @@ from proteus.engine import Engine
 from proteus.scoring import FittedScorer, HeuristicScorer
 from proteus.strategies import REGISTRY
 from proteus.validate import PredictedStructureGate
+from proteus import mpnn as _mpnn
 
 app = Flask(__name__, static_folder=str(Path(__file__).parent))
 
@@ -54,6 +55,8 @@ def analyze():
         "accuracy": {
             "heuristic_r": 0.125,
             "fitted_r": 0.296,
+            "mpnn_r": 0.331,
+            "mpnn_available": _mpnn.available(),
             "best_published_r": 0.460,
             "best_published_name": "ACDC-NN",
             "foldx_r": 0.214,

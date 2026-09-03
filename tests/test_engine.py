@@ -450,3 +450,40 @@ def test_fitted_weights_cover_every_term():
     terms = HeuristicScorer().score(DesignContext(structure=st), st.sequence).terms
     missing = set(terms) - set(FITTED_DDG_WEIGHTS)
     assert not missing, f"terms with no fitted weight: {sorted(missing)}"
+
+
+# ------------------------------------------------------------- ProteinMPNN
+
+def test_mpnn_module_imports_without_torch():
+    """The core package must stay usable on a machine with no ML stack."""
+    from proteus import mpnn
+    assert isinstance(mpnn.available(), bool)
+
+
+def test_mpnn_require_explains_installation():
+    from proteus import mpnn
+    if not mpnn.available():
+        with pytest.raises(ImportError, match="proteinmpnn"):
+            mpnn.require()
+
+
+def test_mpnn_alphabet_matches_the_package():
+    """An alphabet off by one silently scores the wrong residue."""
+    from proteus import mpnn
+    if not mpnn.available():
+        pytest.skip("proteinmpnn not installed")
+    import re, inspect
+    from proteinmpnn import protein_mpnn_utils as U
+    found = re.search(r"alphabet\s*=\s*['\"]([A-Z]+)['\"]",
+                      inspect.getsource(U.tied_featurize))
+    assert found, "could not locate the alphabet in the package"
+    assert mpnn.ALPHABET == found.group(1)
+
+
+def test_mpnn_sequence_scorer_rejects_synthetic_structures():
+    """It reads a file; a structure built from arrays has none."""
+    from proteus.mpnn import MPNNSequenceScorer
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    with pytest.raises(ValueError, match="source path"):
+        MPNNSequenceScorer().score(ctx, st.sequence)

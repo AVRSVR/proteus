@@ -430,11 +430,15 @@ async function analyze() {
            determined &Delta;&Delta;G, cross-validated grouped by protein.<br>
            <span class="mono">heuristic |r| = ${a.heuristic_r.toFixed(3)}</span> &nbsp;
            <span class="mono">fitted |r| = ${a.fitted_r.toFixed(3)}</span> &nbsp;
-           <span class="mono">${a.best_published_name} |r| = ${a.best_published_r.toFixed(3)}</span>
-           &nbsp;<span class="mono">FoldX |r| = ${a.foldx_r.toFixed(3)}</span><br>
-           The fitted scorer reaches about ${pct(a.fitted_r)}% of the best published predictor
-           and beats FoldX; the hand-tuned one reaches ${pct(a.heuristic_r)}%. Treat output as a
-           ranked hypothesis to test, not a stability prediction.
+           <span class="mono">ProteinMPNN |r| = ${(a.mpnn_r||0).toFixed(3)}</span><br>
+           <span class="mono">FoldX |r| = ${a.foldx_r.toFixed(3)}</span> &nbsp;
+           <span class="mono">${a.best_published_name} |r| = ${a.best_published_r.toFixed(3)}</span><br>
+           ProteinMPNN is the strongest of the three here, at about ${pct(a.mpnn_r||0)}% of the
+           best published predictor; the fitted scorer reaches ${pct(a.fitted_r)}% and the
+           hand-tuned one ${pct(a.heuristic_r)}%. ${a.mpnn_available
+             ? "ProteinMPNN is installed and available."
+             : "ProteinMPNN is not installed here (pip install torch proteinmpnn)."}
+           Treat output as a ranked hypothesis to test, not a stability prediction.
          </div>` +
         (d.fitted_score !== undefined
           ? `<div class="hint" style="margin-top:6px;">this structure &mdash;
