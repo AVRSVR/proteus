@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from proteus import DesignContext, from_pdb
 from proteus import membrane as membrane_mod
 from proteus.engine import Engine
-from proteus.scoring import HeuristicScorer
+from proteus.scoring import FittedScorer, HeuristicScorer
 from proteus.strategies import REGISTRY
 from proteus.validate import PredictedStructureGate
 
@@ -38,8 +38,8 @@ def analyze():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
 
-    scorer = HeuristicScorer()
-    breakdown = scorer.score(ctx, structure.sequence)
+    breakdown = HeuristicScorer().score(ctx, structure.sequence)
+    fitted = FittedScorer().score(ctx, structure.sequence)
     applicable = REGISTRY.applicable(ctx)
 
     return jsonify({
@@ -47,6 +47,18 @@ def analyze():
         "sequence": structure.sequence,
         "score": breakdown.per_residue,
         "terms": breakdown.terms,
+        "fitted_score": fitted.total,
+        # Measured accuracy, so neither number is ever shown without the
+        # context that says how much to trust it. Both are |Pearson r| against
+        # 669 experimental ddG values (S669), 10-fold CV grouped by protein.
+        "accuracy": {
+            "heuristic_r": 0.125,
+            "fitted_r": 0.296,
+            "best_published_r": 0.460,
+            "best_published_name": "ACDC-NN",
+            "foldx_r": 0.214,
+            "benchmark": "S669 (669 mutations, 94 proteins)",
+        },
         "strategies": [
             {"name": s.name, "sites": len(s.diagnose(ctx)), "mechanism": s.mechanism}
             for s in sorted(applicable, key=lambda s: -len(s.diagnose(ctx)))

@@ -431,3 +431,69 @@ class RosettaScorer(Scorer):
         total = float(self._scorefxn()(pose))
         return ScoreBreakdown(total=total, terms={self.weights: total},
                               n_residues=pose.total_residue())
+
+
+# Weights fitted to S669 -- 669 experimentally measured single-point ddG values
+# across 94 proteins, curated to share at most 30% sequence identity with the
+# training sets of the published predictors.
+#
+# Ridge regression over the nine HeuristicScorer terms, evaluated with 10-fold
+# cross-validation *grouped by protein*, so no protein appears in both the
+# training and evaluation half of a fold. That grouping matters: the ungrouped
+# number is 0.311 and is inflated by mutations from the same protein leaking
+# across the split.
+#
+#   hand-tuned weights   |r| = 0.125
+#   these weights        |r| = 0.296
+#
+# For scale, published predictors on the same 669 rows reach |r| 0.40-0.46
+# (ACDC-NN 0.460, DDGun3D 0.432, INPS3D 0.430, RaSP 0.403, ProteinMPNN-ddG
+# 0.398), and FoldX reaches 0.214. So this is a real improvement that remains
+# clearly short of the state of the art, and should be described that way.
+FITTED_DDG_WEIGHTS = {
+    "interactions": 1.3791,
+    "ss_propensity": 1.0220,
+    "bb_entropy": -0.2830,
+    "burial": 0.2791,
+    "liabilities": 0.1433,
+    "capping": 0.1245,
+    "packing": 0.1050,
+    "aggregation": -0.0864,
+    "net_charge": 0.0731,
+}
+FITTED_DDG_INTERCEPT = 0.8541
+
+
+class FittedScorer(HeuristicScorer):
+    """HeuristicScorer with term weights fitted to experimental ddG.
+
+    Computes exactly the same nine terms as its parent, then combines them with
+    weights regressed against measured stability changes instead of chosen by
+    hand. On the S669 benchmark this roughly doubles rank correlation with
+    experiment (Spearman 0.165 -> 0.303).
+
+    Two things to keep in mind when using it:
+
+    Its output is calibrated toward *ddG in kcal/mol*, not toward the
+    per-residue quantity the search loop anneals on. Swapping it into the
+    engine changes the meaning of every threshold tuned against
+    HeuristicScorer, including ``min_gain_per_mutation``.
+
+    And it is fitted on single-point mutations in natural, mostly mesophilic
+    proteins. Applying it to a designed sequence carrying twenty simultaneous
+    mutations is extrapolation, and the benchmark says nothing about how it
+    behaves there.
+    """
+
+    name = "fitted"
+
+    def score(self, ctx: DesignContext, sequence: str) -> ScoreBreakdown:
+        base = super().score(ctx, sequence)
+        n = max(len(sequence), 1)
+        # Terms are per-residue inside the parent; the fit was done on
+        # whole-chain deltas, so scale back up before applying the weights.
+        total = FITTED_DDG_INTERCEPT + sum(
+            FITTED_DDG_WEIGHTS.get(name, 0.0) * value * n
+            for name, value in base.terms.items()
+        )
+        return ScoreBreakdown(total=total, terms=base.terms, n_residues=n)

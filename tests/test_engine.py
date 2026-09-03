@@ -419,3 +419,34 @@ def test_rationale_names_the_strategy_that_chose_the_residue():
         if allowed:
             assert any(new in a for a in allowed), (
                 f"{name} credited for {new} at {pos} but never proposes it")
+
+
+# ------------------------------------------------------------ fitted scorer
+
+def test_fitted_scorer_uses_the_same_terms_as_the_heuristic():
+    """The fit reweights the existing terms; it does not invent new ones."""
+    from proteus.scoring import FittedScorer
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    h = HeuristicScorer().score(ctx, st.sequence)
+    f = FittedScorer().score(ctx, st.sequence)
+    assert set(f.terms) == set(h.terms)
+    assert f.terms == h.terms          # term values identical, only the sum differs
+
+
+def test_fitted_scorer_differs_from_hand_tuned_total():
+    """If the fitted weights reproduced the hand-tuned sum, the fit did nothing."""
+    from proteus.scoring import FittedScorer
+    st = poor_bundle()
+    ctx = DesignContext(structure=st)
+    assert (FittedScorer().score(ctx, st.sequence).total
+            != pytest.approx(HeuristicScorer().score(ctx, st.sequence).total))
+
+
+def test_fitted_weights_cover_every_term():
+    """A term with no fitted weight would be silently dropped from the total."""
+    from proteus.scoring import FITTED_DDG_WEIGHTS
+    st = poor_bundle()
+    terms = HeuristicScorer().score(DesignContext(structure=st), st.sequence).terms
+    missing = set(terms) - set(FITTED_DDG_WEIGHTS)
+    assert not missing, f"terms with no fitted weight: {sorted(missing)}"

@@ -237,6 +237,8 @@
     <p class="lead">Nothing has been changed yet. This is what Proteus sees: the score
       broken into its terms, and which mechanisms find something to act on.</p>
     <div class="stats" id="diagStats"></div>
+    <div id="accuracyBox" style="border:1px solid var(--line-soft); border-radius:3px;
+         padding:10px 12px; margin-bottom:14px; background:#fbfaf4;"></div>
     <div style="margin-bottom:6px;"><strong style="font-size:12.5px;">Score terms</strong>
       <span class="hint" style="display:inline;">&mdash; lower is better; positive values are what the run will try to reduce</span></div>
     <div class="terms" id="termGrid"></div>
@@ -417,6 +419,28 @@ async function analyze() {
       stat(d.strategies.length, "mechanisms apply") +
       stat(memVal ? "membrane" : "soluble", "environment");
 
+    if (d.accuracy) {
+      const a = d.accuracy;
+      const pct = x => Math.round(x / a.best_published_r * 100);
+      document.getElementById("accuracyBox").innerHTML =
+        `<div style="font-size:12.5px; font-weight:600; color:var(--bark); margin-bottom:5px;">
+           How much should you trust these numbers?</div>
+         <div class="hint" style="line-height:1.5;">
+           Measured on <strong>${a.benchmark}</strong> &mdash; correlation with experimentally
+           determined &Delta;&Delta;G, cross-validated grouped by protein.<br>
+           <span class="mono">heuristic |r| = ${a.heuristic_r.toFixed(3)}</span> &nbsp;
+           <span class="mono">fitted |r| = ${a.fitted_r.toFixed(3)}</span> &nbsp;
+           <span class="mono">${a.best_published_name} |r| = ${a.best_published_r.toFixed(3)}</span>
+           &nbsp;<span class="mono">FoldX |r| = ${a.foldx_r.toFixed(3)}</span><br>
+           The fitted scorer reaches about ${pct(a.fitted_r)}% of the best published predictor
+           and beats FoldX; the hand-tuned one reaches ${pct(a.heuristic_r)}%. Treat output as a
+           ranked hypothesis to test, not a stability prediction.
+         </div>` +
+        (d.fitted_score !== undefined
+          ? `<div class="hint" style="margin-top:6px;">this structure &mdash;
+             <span class="mono">fitted score ${d.fitted_score.toFixed(2)}</span>
+             (&Delta;&Delta;G-calibrated scale, not the per-residue value below)</div>` : "");
+    }
     const tg = document.getElementById("termGrid"); tg.innerHTML = "";
     for (const [k,v] of Object.entries(d.terms)) {
       const cls = v > 0.0005 ? "pos" : (v < -0.0005 ? "neg" : "");
