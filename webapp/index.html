@@ -157,6 +157,18 @@
   #status { font-size: 12.5px; color: var(--ink-soft); margin-top: 11px; min-height: 17px; }
   #status.err { color: var(--rust); }
   .hidden { display: none; }
+  table.acc { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  table.acc th { font-size: 10.5px; padding: 4px 8px 4px 0; }
+  table.acc td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line-soft); }
+  table.acc td.n { font-family: "IBM Plex Mono", monospace; text-align: right; width: 62px; }
+  table.acc tr.us td { color: var(--ink); }
+  table.acc tr.ref td { color: #8b9186; }
+  table.acc .bar { display: inline-block; height: 6px; background: var(--lichen);
+                   border-radius: 2px; vertical-align: middle; }
+  table.acc tr.ref .bar { background: #cfd4c9; }
+  table.acc .tag { font-size: 10px; padding: 1px 6px; border-radius: 8px;
+                   background: #e6ece0; color: var(--moss); }
+  table.acc .tag.off { background: #eceae2; color: #8b9186; }
   .arrow { color: #a8b09f; }
 </style>
 </head>
@@ -267,13 +279,13 @@
     <div class="field" style="margin-top:16px; max-width:340px;">
       <label for="scorerSel">Objective</label>
       <select id="scorerSel">
-        <option value="heuristic">Heuristic &mdash; hand-tuned (|r| 0.125)</option>
-        <option value="fitted">Fitted &mdash; refit weights (|r| 0.296)</option>
-        <option value="mpnn">ProteinMPNN &mdash; learned (|r| 0.331)</option>
+        <option value="heuristic">Heuristic &mdash; hand-tuned, fastest</option>
+        <option value="fitted">Fitted &mdash; refit weights, more accurate</option>
+        <option value="mpnn" id="optMpnn">ProteinMPNN &mdash; learned, most accurate, slowest</option>
       </select>
-      <div class="hint">What the search optimises. Correlations are against
-        experimental &Delta;&Delta;G on S669. ProteinMPNN is the most accurate but
-        slower, since it runs a neural network on every candidate.</div>
+      <div class="hint">What the search optimises. See the accuracy table above for how
+        each one scores against measured &Delta;&Delta;G. ProteinMPNN ranks mutations best but
+        runs a neural network on every candidate, so it is noticeably slower.</div>
     </div>
     <div id="pickWrap" class="hidden" style="margin-top:14px;">
       <div style="margin-bottom:7px;"><strong style="font-size:12.5px;">Select mechanisms</strong>
@@ -433,29 +445,61 @@ async function analyze() {
     if (d.accuracy) {
       const a = d.accuracy;
       const pct = x => Math.round(x / a.best_published_r * 100);
+      const rows = [
+        ["Heuristic",        a.heuristic_r, true,  "hand-tuned weights"],
+        ["Fitted",           a.fitted_r,    true,  "same terms, weights refit to ddG"],
+        ["ProteinMPNN",      a.mpnn_r || 0, a.mpnn_available, "learned, structure-conditioned"],
+        ["FoldX",            a.foldx_r,     null,  "proprietary; needs a licence and binary"],
+        [a.best_published_name, a.best_published_r, null, "needs MSA profiles (HHblits + UniRef30)"],
+      ];
+      // A scorer that is not installed must not be offerable: selecting it
+      // would fail server-side with an install message instead of running.
+      const optMpnn = document.getElementById("optMpnn");
+      if (optMpnn) {
+        optMpnn.disabled = !a.mpnn_available;
+        if (!a.mpnn_available) {
+          optMpnn.textContent = "ProteinMPNN — not installed (pip install torch proteinmpnn)";
+          const sel = document.getElementById("scorerSel");
+          if (sel && sel.value === "mpnn") sel.value = "fitted";
+        }
+      }
+      const maxR = Math.max(...rows.map(r => r[1]));
+      const body = rows.map(([name, r, avail, note]) => {
+        const isRef = avail === null;
+        const tag = isRef
+          ? '<span class="tag off">reference only</span>'
+          : (avail ? '<span class="tag">selectable</span>'
+                   : '<span class="tag off">not installed</span>');
+        return `<tr class="${isRef ? 'ref' : 'us'}">
+          <td>${name}</td>
+          <td class="n">${r.toFixed(3)}</td>
+          <td style="width:110px;"><span class="bar" style="width:${Math.round(r/maxR*100)}px;"></span></td>
+          <td>${tag}</td>
+          <td class="hint" style="margin:0;">${note}</td></tr>`;
+      }).join("");
+
       document.getElementById("accuracyBox").innerHTML =
-        `<div style="font-size:12.5px; font-weight:600; color:var(--bark); margin-bottom:5px;">
+        `<div style="font-size:12.5px; font-weight:600; color:var(--bark); margin-bottom:3px;">
            How much should you trust these numbers?</div>
          <div class="hint" style="line-height:1.5;">
-           Measured on <strong>${a.benchmark}</strong> &mdash; correlation with experimentally
-           determined &Delta;&Delta;G, cross-validated grouped by protein.<br>
-           <span class="mono">heuristic |r| = ${a.heuristic_r.toFixed(3)}</span> &nbsp;
-           <span class="mono">fitted |r| = ${a.fitted_r.toFixed(3)}</span> &nbsp;
-           <span class="mono">ProteinMPNN |r| = ${(a.mpnn_r||0).toFixed(3)}</span><br>
-           <span class="mono">FoldX |r| = ${a.foldx_r.toFixed(3)}</span> &nbsp;
-           <span class="mono">${a.best_published_name} |r| = ${a.best_published_r.toFixed(3)}</span><br>
-           ProteinMPNN is the strongest of the three here, at about ${pct(a.mpnn_r||0)}% of the
-           best published predictor; the fitted scorer reaches ${pct(a.fitted_r)}% and the
-           hand-tuned one ${pct(a.heuristic_r)}%. ${a.mpnn_available
-             ? "ProteinMPNN is installed and available."
-             : "ProteinMPNN is not installed here (pip install torch proteinmpnn)."}
-           Treat output as a ranked hypothesis to test, not a stability prediction.
+           Correlation (|Pearson r|) with experimentally measured &Delta;&Delta;G on
+           <strong>${a.benchmark}</strong>, cross-validated grouped by protein so no protein
+           appears in both halves of a fold.</div>
+         <table class="acc"><tbody>${body}</tbody></table>
+         <div class="hint" style="margin-top:8px; line-height:1.5;">
+           The first three can be chosen as the objective below. The greyed rows are published
+           results on the same 669 mutations, shown for scale only &mdash; they are not options
+           here: FoldX is proprietary, and ${a.best_published_name} needs multiple-sequence
+           alignments this tool does not build.<br>
+           Even the best of these explains well under half the variance in measured stability.
+           Treat any output as a ranked hypothesis to test, not a prediction.
          </div>` +
         (d.fitted_score !== undefined
           ? `<div class="hint" style="margin-top:6px;">this structure &mdash;
              <span class="mono">fitted score ${d.fitted_score.toFixed(2)}</span>
              (&Delta;&Delta;G-calibrated scale, not the per-residue value below)</div>` : "");
     }
+
     const tg = document.getElementById("termGrid"); tg.innerHTML = "";
     for (const [k,v] of Object.entries(d.terms)) {
       const cls = v > 0.0005 ? "pos" : (v < -0.0005 ? "neg" : "");
