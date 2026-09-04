@@ -264,6 +264,17 @@
           fix the surface".</div>
       </div>
     </div>
+    <div class="field" style="margin-top:16px; max-width:340px;">
+      <label for="scorerSel">Objective</label>
+      <select id="scorerSel">
+        <option value="heuristic">Heuristic &mdash; hand-tuned (|r| 0.125)</option>
+        <option value="fitted">Fitted &mdash; refit weights (|r| 0.296)</option>
+        <option value="mpnn">ProteinMPNN &mdash; learned (|r| 0.331)</option>
+      </select>
+      <div class="hint">What the search optimises. Correlations are against
+        experimental &Delta;&Delta;G on S669. ProteinMPNN is the most accurate but
+        slower, since it runs a neural network on every candidate.</div>
+    </div>
     <div id="pickWrap" class="hidden" style="margin-top:14px;">
       <div style="margin-bottom:7px;"><strong style="font-size:12.5px;">Select mechanisms</strong>
         <span class="hint" style="display:inline;">&mdash; click to toggle; only ones applicable to this structure are shown</span></div>
@@ -499,7 +510,8 @@ async function runStabilize() {
     document.getElementById("runStats").innerHTML =
       stat(d.n_mutations, "mutations") +
       stat((d.identity*100).toFixed(1)+"%", "identity retained") +
-      stat(d.improvement.toFixed(4), "improvement / residue");
+      stat(d.improvement.toFixed(4), "improvement / residue") +
+      stat(d.scorer || "heuristic", "objective");
 
     const tb = document.getElementById("changeTable"); tb.innerHTML = "";
     if (!d.changes.length) tb.innerHTML = `<tr><td colspan="3" style="color:#7d8878;">No changes.</td></tr>`;

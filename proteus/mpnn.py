@@ -227,9 +227,14 @@ class MPNNSequenceScorer:
                 "this context has no source path."
             )
         mean_ll = self._inner.score_sequence(source, sequence, self.chain)
-        return ScoreBreakdown(total=-mean_ll,
+        n = max(len(sequence), 1)
+        # ScoreBreakdown.total is a whole-chain quantity everywhere else, and
+        # per_residue divides by length. score_sequence already returns a mean,
+        # so it is multiplied back up here; storing the mean directly would
+        # make per_residue divide by the length twice.
+        return ScoreBreakdown(total=-mean_ll * n,
                               terms={"mpnn_log_likelihood": mean_ll},
-                              n_residues=max(len(sequence), 1))
+                              n_residues=n)
 
     def total(self, ctx, sequence: str) -> float:
         return self.score(ctx, sequence).total

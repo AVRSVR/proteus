@@ -165,8 +165,24 @@ def run():
 
     generations = int(data.get("generations", 40))
     chosen = data.get("strategies") or None
+
+    # Scorer choice. The gain threshold is left to calibrate itself for
+    # anything but the hand-tuned default, whose 0.0003 was measured against
+    # that scorer alone and means nothing on another scale.
+    which = (data.get("scorer") or "heuristic").lower()
+    scorer, min_gain = None, 0.0003
+    if which == "fitted":
+        scorer, min_gain = FittedScorer(), None
+    elif which in ("mpnn", "proteinmpnn"):
+        if not _mpnn.available():
+            return jsonify({"error": "ProteinMPNN is not installed here. "
+                                     "pip install torch proteinmpnn"}), 400
+        scorer = _mpnn.MPNNSequenceScorer(chain=data.get("chain") or None)
+        min_gain = None
+
     try:
-        engine = Engine(ctx, seed=0, allowed_strategies=chosen)
+        engine = Engine(ctx, seed=0, allowed_strategies=chosen,
+                        scorer=scorer, min_gain_per_mutation=min_gain)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     result = engine.run(generations=min(generations, 200))
@@ -186,6 +202,8 @@ def run():
         "changes": changes,
         "credit": result.credit(),
         "mode": "manual" if chosen else "autonomous",
+        "scorer": which,
+        "min_gain": engine.min_gain_per_mutation,
         "leaderboard": [
             {"name": a.name, "pulls": a.pulls, "win_rate": a.success_rate,
              "mean_reward": a.mean_reward}

@@ -276,7 +276,7 @@ class Engine:
         calibration_moves: int = 6,
         tabu_tenure: int = 4,
         mutation_budget: float = 0.15,
-        min_gain_per_mutation: float = 0.0003,
+        min_gain_per_mutation: float | None = 0.0003,
         knowledge=None,
         protein: str = "",
         allowed_strategies: list[str] | None = None,
@@ -335,7 +335,15 @@ class Engine:
         # Changing the scorer's terms or weights means re-measuring it; the
         # panel above is the procedure.
         self.mutation_budget = mutation_budget
-        self.min_gain_per_mutation = max(min_gain_per_mutation, 0.0)
+        # None means "work it out from this scorer". The default 0.0003 was
+        # measured against HeuristicScorer and is meaningless for any other
+        # objective -- ProteinMPNN log-likelihoods live on a different scale
+        # entirely, so a threshold tuned for one silently blocks or admits
+        # everything under the other.
+        if min_gain_per_mutation is None:
+            self.min_gain_per_mutation = self._calibrate_gain_threshold(ctx)
+        else:
+            self.min_gain_per_mutation = max(min_gain_per_mutation, 0.0)
         n_designable = max(len(ctx.designable), 1)
         self.max_mutations = max(1, int(round(mutation_budget * n_designable)))
 
@@ -377,6 +385,48 @@ class Engine:
             return self.t1
         frac = gen / (total - 1)
         return self.t0 * (self.t1 / self.t0) ** frac
+
+    #: Fraction of the typical single-mutation effect a change must deliver.
+    #: Calibrated thresholds are set to this share of the median absolute
+    #: effect the scorer reports for a random substitution.
+    GAIN_THRESHOLD_FRACTION = 0.35
+
+    def _calibrate_gain_threshold(self, ctx, samples: int = 24) -> float:
+        """Measure this scorer's own scale for a single substitution.
+
+        Samples random single mutations and takes a fraction of the median
+        absolute score change. That keeps the threshold meaningful whichever
+        objective is in use, instead of carrying a constant fitted to one.
+        """
+        sequence = ctx.structure.sequence
+        positions = list(ctx.designable) or list(ctx.positions)
+        if not positions:
+            return 0.0
+        rng = random.Random(0)
+        try:
+            # Per-residue, because that is the unit the threshold is applied
+            # in. Calibrating on whole-chain totals overshoots by the chain
+            # length and blocks every mutation.
+            base = self.scorer.score(ctx, sequence).per_residue
+        except Exception:
+            return 0.0
+        deltas = []
+        for _ in range(samples):
+            p = rng.choice(positions)
+            alt = rng.choice("ACDEFGHIKLMNPQRSTVWY")
+            if alt == sequence[p - 1]:
+                continue
+            seq = list(sequence)
+            seq[p - 1] = alt
+            try:
+                deltas.append(
+                    abs(self.scorer.score(ctx, "".join(seq)).per_residue - base))
+            except Exception:
+                continue
+        if not deltas:
+            return 0.0
+        deltas.sort()
+        return self.GAIN_THRESHOLD_FRACTION * deltas[len(deltas) // 2]
 
     def _mutation_penalty(self, n_mutations: int) -> float:
         """Price of having drifted this far from the input.
