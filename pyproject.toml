@@ -9,7 +9,7 @@ description = "A strategy library for stabilizing designed proteins, soluble and
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Anant Rao" }]
+authors = [{ name = "Ananth Vasuki Rao" }]
 keywords = ["protein-design", "protein-stability", "membrane-proteins", "rosetta"]
 
 dependencies = [
