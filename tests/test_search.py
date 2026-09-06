@@ -143,3 +143,66 @@ def test_every_attempt_is_reported():
                     max_attempts=5, generations=10)
     assert len(result.attempts) == 5
     assert all(a.sequence for a in result.attempts)
+
+
+# ------------------------------------------------- burial-first relaxation
+
+def test_stages_relax_burial_before_edit_size():
+    """Burial is the stronger predictor, so it is relaxed first."""
+    from proteus.search import allowed_layers
+    assert allowed_layers(1, 12) == ("core", "boundary", "surface")
+    assert allowed_layers(5, 12) == ("boundary", "surface")
+    assert allowed_layers(12, 12) == ("surface",)
+
+
+def test_budget_holds_until_the_final_stage():
+    """Edit size only shrinks once restricting burial has already failed."""
+    early = [budget_schedule(i, 12, 0.15, 58) for i in range(1, 9)]
+    assert all(b == pytest.approx(0.15) for b in early)
+    assert budget_schedule(12, 12, 0.15, 58) < 0.15
+
+
+def test_later_attempts_leave_the_core_alone():
+    """A restricted stage must not return any buried mutation."""
+    st = bundle()
+    ctx = DesignContext(structure=st)
+    core = {p for p in ctx.positions if ctx.layer(p) == "core"}
+    if not core:
+        pytest.skip("test structure has no core positions")
+
+    touched = []
+
+    def folder(seq):
+        changed = {i + 1 for i, (a, b) in enumerate(zip(st.sequence, seq)) if a != b}
+        touched.append(changed)
+        return 9.0, 70.0, False, ""          # never passes, so every stage runs
+
+    search(ctx, folder, max_attempts=12, generations=12)
+    # The final third runs surface-only; none of those may touch the core.
+    for changed in touched[-2:]:
+        assert not (changed & core), sorted(changed & core)
+
+
+def test_restricting_layers_still_respects_user_frozen_positions():
+    """Layer restriction adds to the frozen set rather than replacing it."""
+    st = bundle()
+    frozen = frozenset(range(1, 12))
+    ctx = DesignContext(structure=st, frozen=frozen)
+    seen = []
+
+    def folder(seq):
+        seen.append({i + 1 for i, (a, b) in enumerate(zip(st.sequence, seq)) if a != b})
+        return 9.0, 70.0, False, ""
+
+    search(ctx, folder, max_attempts=9, generations=12)
+    for changed in seen:
+        assert not (changed & frozen), sorted(changed & frozen)
+
+
+def test_attempt_records_which_layers_it_could_touch():
+    ctx = DesignContext(structure=bundle())
+    result = search(ctx, lambda s: (9.0, 70.0, False, ""),
+                    max_attempts=9, generations=12)
+    assert all(a.layers for a in result.attempts)
+    assert result.attempts[0].layers == ("core", "boundary", "surface")
+    assert result.attempts[-1].layers == ("surface",)

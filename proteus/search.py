@@ -6,18 +6,30 @@ afterwards by folding it, and in practice the answer is often no. Running once
 and checking once therefore fails most of the time.
 
 This closes the loop: propose, fold, check, and if the fold check fails, try
-again differently. The important word is *differently*. Re-rolling the seed and
-hoping is close to useless, because the usual reason a design stops folding is
-not that the mutations were individually bad but that there were too many of
-them at once. So the schedule shrinks the edit as it goes:
+again differently. The important word is *differently*, and what to vary was
+settled by measurement rather than assumption.
 
-    attempt 1..k     full mutation budget, different seeds
-    later attempts   progressively smaller budgets
+The first version shrank the number of mutations, on the theory that a design
+stops folding because too many things changed at once. That theory is wrong,
+at least for the case that tested it. On a three-helix design that refolds at
+1.21 A, an attempt making *two* mutations collapsed it to 27 A while an
+attempt making *four* left it at 1.21 A. Count was not the variable.
 
-By the end it is proposing a handful of changes rather than a rewrite, which
-is the regime where a design is most likely to survive. If nothing passes, the
-attempt that came closest is reported rather than discarded, because a run
-that reached 2.4 A is more useful to see than a bare failure.
+The variable was burial. The two-mutation failure contained A22I -- alanine to
+isoleucine at a buried position, adding some 78 cubic angstroms of sidechain
+into a packed core. The four-mutation success touched only the surface. A
+buried substitution has to be accommodated by the entire fold; a surface one
+mostly has to be tolerated by solvent.
+
+So the schedule relaxes in two stages, burial first:
+
+    stage 1   every position, full budget, different seeds
+    stage 2   surface and boundary only -- the core is left alone
+    stage 3   surface only, with the budget shrinking as well
+
+If nothing passes, the attempt that came closest is reported rather than
+discarded, because a run that reached 2.4 A is more useful than a bare
+failure.
 """
 
 from __future__ import annotations
@@ -33,6 +45,15 @@ from .engine import Engine
 #: further mostly wastes attempts.
 MIN_BUDGET_MUTATIONS = 2
 
+#: Layers the loop is willing to mutate at each stage, in order. Burial is
+#: relaxed before edit size because it is the stronger predictor of whether a
+#: design survives refolding -- see the module docstring for the measurement.
+LAYER_STAGES = (
+    ("core", "boundary", "surface"),
+    ("boundary", "surface"),
+    ("surface",),
+)
+
 
 @dataclass
 class Attempt:
@@ -41,6 +62,8 @@ class Attempt:
     index: int
     seed: int
     mutation_budget: float
+    #: Layers this attempt was allowed to mutate.
+    layers: tuple[str, ...]
     n_mutations: int
     identity: float
     improvement: float
@@ -58,7 +81,8 @@ class Attempt:
                     f"fold unavailable ({self.note})")
         verdict = "PASS" if self.passed else "fail"
         plddt = f", pLDDT {self.plddt:.1f}" if self.plddt is not None else ""
-        return (f"attempt {self.index}: {self.n_mutations} mutations, "
+        where = "+".join(layer[0] for layer in self.layers)
+        return (f"attempt {self.index}: {self.n_mutations} mutations [{where}], "
                 f"scRMSD {self.sc_rmsd:.2f} A{plddt} -- {verdict}")
 
 
@@ -89,17 +113,35 @@ class SearchResult:
         return "\n".join(lines)
 
 
+def stage_for(attempt: int, total: int) -> int:
+    """Which relaxation stage an attempt belongs to (0, 1 or 2).
+
+    Split into thirds. The first third explores seeds with everything on the
+    table, since a design that tolerates core changes is worth discovering
+    rather than assuming away.
+    """
+    third = max(1, total // 3)
+    if attempt <= third:
+        return 0
+    if attempt <= 2 * third:
+        return 1
+    return 2
+
+
+def allowed_layers(attempt: int, total: int) -> tuple[str, ...]:
+    """Layers this attempt may mutate."""
+    return LAYER_STAGES[stage_for(attempt, total)]
+
+
 def budget_schedule(attempt: int, total: int, start_budget: float,
                     n_designable: int) -> float:
     """Mutation budget for a given attempt.
 
-    Holds the full budget for the first third of the attempts, exploring
-    different seeds at full size, then decays geometrically toward the
-    smallest edit worth making. Front-loading the full budget matters: if the
-    design tolerates a large edit we would rather find that than spend every
-    attempt being timid.
+    Holds full size until the final stage. Burial is relaxed first, so the
+    budget only starts shrinking once the loop has already restricted itself
+    to surface positions and still not succeeded.
     """
-    explore = max(1, total // 3)
+    explore = max(1, total // 3) * 2
     if attempt <= explore:
         return start_budget
 
@@ -150,9 +192,22 @@ def search(
             result.stopped_because = "cancelled"
             return result
 
-        budget = budget_schedule(conclusive + 1, max_attempts,
-                                 start_budget, n_designable)
-        engine = Engine(ctx, seed=i, scorer=scorer,
+        step = conclusive + 1
+        budget = budget_schedule(step, max_attempts, start_budget, n_designable)
+        layers = allowed_layers(step, max_attempts)
+
+        # Restricting burial is expressed by freezing the positions that are
+        # off limits, which the engine already guarantees it will not touch.
+        attempt_ctx = ctx
+        if len(layers) < 3:
+            off_limits = frozenset(
+                p for p in ctx.positions if ctx.layer(p) not in layers)
+            if off_limits:
+                attempt_ctx = DesignContext(
+                    structure=ctx.structure, membrane=ctx.membrane,
+                    frozen=ctx.frozen | off_limits)
+
+        engine = Engine(attempt_ctx, seed=i, scorer=scorer,
                         allowed_strategies=allowed_strategies,
                         mutation_budget=budget,
                         min_gain_per_mutation=None if scorer else 0.0003)
@@ -160,7 +215,8 @@ def search(
 
         if run.n_mutations == 0:
             # Nothing proposed at this budget; a smaller one will not help.
-            attempt = Attempt(i, i, budget, 0, 1.0, 0.0, run.best_sequence,
+            attempt = Attempt(i, i, budget, layers, 0, 1.0, 0.0,
+                              run.best_sequence,
                               note="no mutations proposed")
             result.attempts.append(attempt)
             if on_attempt:
@@ -170,8 +226,9 @@ def search(
         if run.best_sequence in seen:
             # The same candidate as a previous attempt; folding it again would
             # spend minutes to learn nothing.
-            attempt = Attempt(i, i, budget, run.n_mutations, run.identity,
-                              run.improvement, run.best_sequence,
+            attempt = Attempt(i, i, budget, layers, run.n_mutations,
+                              run.identity, run.improvement,
+                              run.best_sequence,
                               note="duplicate of an earlier attempt")
             result.attempts.append(attempt)
             if on_attempt:
@@ -180,7 +237,7 @@ def search(
         seen.add(run.best_sequence)
 
         rmsd, plddt, passed, note = fold_and_check(run.best_sequence)
-        attempt = Attempt(i, i, budget, run.n_mutations, run.identity,
+        attempt = Attempt(i, i, budget, layers, run.n_mutations, run.identity,
                           run.improvement, run.best_sequence,
                           sc_rmsd=rmsd, plddt=plddt, passed=passed, note=note)
         result.attempts.append(attempt)
