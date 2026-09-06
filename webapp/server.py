@@ -440,7 +440,8 @@ SEARCH_FOLD_ATTEMPTS = 3
 def _search_worker(job_id: str, pdb_text: str, chain: str | None,
                    membrane: bool, frozen, which: str, chosen,
                    max_attempts: int, generations: int, budget: float,
-                   rmsd_cutoff: float, deadline: float) -> None:
+                   rmsd_cutoff: float, plddt_cutoff: float | None,
+                   deadline: float) -> None:
     from proteus.search import search as run_search
 
     def publish(**kw):
@@ -473,7 +474,8 @@ def _search_worker(job_id: str, pdb_text: str, chain: str | None,
             if len(predicted) != len(reference):
                 return None, None, False, "length mismatch"
             check = PredictedStructureGate(
-                predicted, rmsd_cutoff=rmsd_cutoff
+                predicted, rmsd_cutoff=rmsd_cutoff,
+                plddt_cutoff=plddt_cutoff,
             ).check(predicted.sequence, reference)
             with SEARCH_LOCK:
                 SEARCH_JOBS[job_id]["last_pdb"] = pdb_out
@@ -570,6 +572,14 @@ def search_start():
               int(data.get("generations", 40)),
               float(data.get("mutation_budget", 0.15)),
               float(data.get("rmsd", 2.0)),
+              # pLDDT 80 suits a natural protein; small de novo designs
+              # routinely score lower even when the fold is right -- 2A3D, an
+              # experimentally validated three-helix bundle, refolds at 78.9.
+              # Exposed so the bar can match the kind of protein being judged,
+              # and disabled entirely with 0.
+              (lambda v: None if v is not None and float(v) <= 0
+                         else (70.0 if v is None else float(v)))(
+                  data.get("plddt")),
               time.time() + minutes * 60)).start()
     return jsonify({"job": job_id, "max_attempts": max_attempts,
                     "max_minutes": minutes})

@@ -338,6 +338,18 @@
           <div class="hint">Stops at the first pass.</div>
         </div>
         <div class="field">
+          <label for="searchRmsd">scRMSD cutoff (&#8491;)</label>
+          <input type="number" id="searchRmsd" value="3.5" min="0.5" max="10" step="0.1">
+          <div class="hint">ESMFold rarely reproduces a crystal structure to 2 &#8491;
+            even for the native sequence.</div>
+        </div>
+        <div class="field">
+          <label for="searchPlddt">pLDDT cutoff</label>
+          <input type="number" id="searchPlddt" value="70" min="0" max="100">
+          <div class="hint">80 suits a natural protein; small de novo designs score
+            lower even when the fold is right. 0 disables the check.</div>
+        </div>
+        <div class="field">
           <label for="maxMinutes">Time limit (min)</label>
           <input type="number" id="maxMinutes" value="45" min="1" max="180">
           <div class="hint">Folding is slow and unreliable; this caps the whole loop.</div>
@@ -706,6 +718,8 @@ async function startSearch() {
       scorer: document.getElementById("scorerSel").value,
       max_attempts: document.getElementById("maxAttempts").value,
       max_minutes: document.getElementById("maxMinutes").value,
+      rmsd: document.getElementById("searchRmsd").value,
+      plddt: document.getElementById("searchPlddt").value,
     };
     if (mode === "manual") body.strategies = [...picked];
     const d = await (await fetch("/api/search/start", {method:"POST",
