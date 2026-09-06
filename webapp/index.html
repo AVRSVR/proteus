@@ -360,6 +360,38 @@
               style="display:none;">Stop</button>
       <div id="searchResult" style="margin-top:12px;"></div>
     </div>
+    <div style="border-top:1px solid var(--line-soft); margin-top:16px; padding-top:14px;"
+         id="mdBlock">
+      <div style="font-size:12.5px; font-weight:600; color:var(--bark);">
+        Does it hold together? &mdash; short MD screen</div>
+      <div class="hint" style="line-height:1.5; margin-bottom:8px;">
+        Everything above is a score or a structure prediction. This is physics: both
+        structures go into a forcefield, move for a few tens of picoseconds, and are
+        watched for whether they expand. Each is run several times from different
+        starting velocities, and the spread between those runs is the noise floor
+        &mdash; a difference smaller than it is reported as indistinguishable rather
+        than resolved. It needs the folded structure above, so fold first.
+        <b>This is not a free-energy calculation:</b> holding its shape for 45&nbsp;ps
+        is evidence nothing obviously broke, not that the design is more stable.
+      </div>
+      <div class="grid g3" style="max-width:380px;">
+        <div class="field">
+          <label for="mdReplicates">Replicates</label>
+          <input type="number" id="mdReplicates" value="3" min="2" max="5">
+          <div class="hint">Two is the minimum that gives a noise floor at all.</div>
+        </div>
+        <div class="field">
+          <label for="mdPs">Production (ps)</label>
+          <input type="number" id="mdPs" value="45" min="10" max="200" step="5">
+          <div class="hint">Longer sees more, and costs proportionally.</div>
+        </div>
+      </div>
+      <button class="act" onclick="startMD()" id="mdBtn">Run MD screen</button>
+      <button class="act ghost" onclick="cancelMD()" id="mdCancelBtn"
+              style="display:none;">Stop</button>
+      <div id="mdResult" style="margin-top:12px;"></div>
+    </div>
+
     <details class="raw" style="margin-top:16px;"><summary>or fold elsewhere and upload the result</summary>
     <div class="upload" id="dropPred" onclick="document.getElementById('predFile').click()">
       <div class="big" id="predTitle">Choose predicted structure</div>
@@ -503,6 +535,24 @@ async function analyze() {
           if (sel && sel.value === "mpnn") sel.value = "fitted";
         }
       }
+      // Same rule for the MD screen: it is a conda-only dependency the hosted
+      // build does not carry, so the panel says why rather than offering a
+      // button that can only fail.
+      const mdBlock = document.getElementById("mdBlock");
+      if (mdBlock && !a.md_available) {
+        const btn = document.getElementById("mdBtn");
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "MD screen — OpenMM not installed";
+        }
+        const res = document.getElementById("mdResult");
+        if (res) res.innerHTML = '<span class="hint">This screen needs OpenMM and ' +
+          'PDBFixer, which are conda packages rather than wheels and are not in ' +
+          'the hosted build. Run the server locally with ' +
+          '<span class="mono">conda install -c conda-forge openmm pdbfixer</span> ' +
+          'to enable it.</span>';
+      }
+
       const maxR = Math.max(...rows.map(r => r[1]));
       const body = rows.map(([name, r, avail, note]) => {
         const isRef = avail === null;
@@ -700,6 +750,120 @@ function downloadFold() {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
 
+let mdJob = null, mdPoll = null;
+
+// The "before" structure for MD. Set when a search folds the unmutated input,
+// so both sides of the comparison come from ESMFold rather than pitting an
+// ESMFold model against a crystal structure.
+let baselinePdb = "";
+
+function mdNum(x, digits) {
+  return (x === null || x === undefined || !isFinite(x))
+    ? "&mdash;" : Number(x).toFixed(digits === undefined ? 2 : digits);
+}
+
+async function startMD() {
+  const out = document.getElementById("mdResult");
+  const btn = document.getElementById("mdBtn");
+  if (!foldedPdb) {
+    out.innerHTML = '<span class="hint">Fold the design first &mdash; this screen ' +
+      'compares two structures, and the folded output is one of them.</span>';
+    return;
+  }
+  const before = baselinePdb || pdbText;
+  const paired = !!baselinePdb;
+  btn.disabled = true;
+  document.getElementById("mdCancelBtn").style.display = "";
+  const t0 = Date.now();
+  out.innerHTML = '<span class="hint">Starting&hellip;</span>';
+  try {
+    const r = await fetch("/api/md/start", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({before: before, after: foldedPdb,
+        replicates: +document.getElementById("mdReplicates").value,
+        ps: +document.getElementById("mdPs").value})});
+    const d = await r.json();
+    if (d.error) {
+      out.innerHTML = `<span style="color:var(--rust)">${d.error}</span>`;
+      btn.disabled = false; document.getElementById("mdCancelBtn").style.display = "none";
+      return;
+    }
+    mdJob = d.job;
+    if (mdPoll) clearInterval(mdPoll);
+    mdPoll = setInterval(async () => {
+      try {
+        const s = await (await fetch("/api/md/status/" + mdJob)).json();
+        const secs = Math.round((Date.now() - t0) / 1000);
+        if (s.state === "running") {
+          out.innerHTML = `<span class="hint">Running ${s.replicates} replicates of
+            each structure, ${s.production_ps} ps each &mdash; ${secs}s elapsed.
+            This is real MD on the CPU, so it takes minutes.</span>`;
+          return;
+        }
+        clearInterval(mdPoll); mdPoll = null; btn.disabled = false;
+        document.getElementById("mdCancelBtn").style.display = "none";
+        if (s.state === "failed") {
+          out.innerHTML = `<span style="color:var(--rust)">${s.error}</span>`; return;
+        }
+        const colour = s.verdict === "better" ? "var(--moss)"
+                     : s.verdict === "worse" ? "var(--rust)" : "var(--bark)";
+        out.innerHTML =
+          `<div style="font-weight:600; color:${colour}; text-transform:uppercase;
+                       letter-spacing:.04em;">${s.verdict}</div>
+           <div class="hint" style="margin-top:4px;">${s.note}</div>
+           <table class="tbl" style="margin-top:10px;">
+             <tr><th></th><th>Rg mean (&#8491;)</th><th>Rg drift (&#8491;)</th>
+                 <th>noise floor (&#8491;)</th><th>RMSD (&#8491;)</th><th>runs</th></tr>
+             <tr><td>input</td><td>${mdNum(s.before.rg_mean)}</td>
+                 <td>${mdNum(s.before.rg_drift, 3)}</td>
+                 <td>${mdNum(s.before.rg_drift_spread, 3)}</td>
+                 <td>${mdNum(s.before.rmsd_final)}</td>
+                 <td>${s.before.replicates}</td></tr>
+             <tr><td>design</td><td>${mdNum(s.after.rg_mean)}</td>
+                 <td>${mdNum(s.after.rg_drift, 3)}</td>
+                 <td>${mdNum(s.after.rg_drift_spread, 3)}</td>
+                 <td>${mdNum(s.after.rmsd_final)}</td>
+                 <td>${s.after.replicates}</td></tr>
+           </table>
+           <div class="hint" style="margin-top:6px;">` +
+          (paired
+            ? `Both structures were folded by ESMFold, so this compares two
+               sequences rather than two modelling methods.`
+            : `<b>The input here is your uploaded structure, not an ESMFold model
+               of it.</b> Part of any difference below is the difference between
+               how the two structures were produced. Run "Search until it folds"
+               first and this comparison becomes properly paired.`) +
+          ` Finished in ${secs}s. Drift is late-window minus early-window Rg;
+            a difference inside the noise floor is not a result.</div>`;
+      } catch(e) { clearInterval(mdPoll); mdPoll=null; btn.disabled=false;
+                   document.getElementById("mdCancelBtn").style.display = "none";
+                   out.innerHTML = "Polling failed: " + e; }
+    }, 4000);
+  } catch(e) {
+    out.innerHTML = "Request failed: " + e; btn.disabled = false;
+    document.getElementById("mdCancelBtn").style.display = "none";
+  }
+}
+
+async function fetchSearchStructures(job) {
+  // Best-effort: the MD screen falls back to the uploaded structure and says
+  // so, so a failure here degrades the comparison rather than breaking it.
+  try {
+    const w = await (await fetch(`/api/search/structure/${job}`)).json();
+    if (w.pdb) foldedPdb = w.pdb;
+    const base = await (await fetch(
+      `/api/search/structure/${job}?which=baseline`)).json();
+    if (base.pdb) baselinePdb = base.pdb;
+  } catch (e) { /* leave whatever autoFold already set */ }
+}
+
+async function cancelMD() {
+  if (!mdJob) return;
+  await fetch("/api/md/cancel/" + mdJob, {method:"POST"});
+  document.getElementById("mdResult").innerHTML =
+    '<span class="hint">Stopping after the current frame&hellip;</span>';
+}
+
 let searchJob = null, searchPoll = null;
 
 async function startSearch() {
@@ -789,6 +953,8 @@ async function pollSearch(t0, meta) {
         <span class="mono" style="margin-left:8px;">${b.n_mutations} mutations,
         scRMSD ${b.sc_rmsd.toFixed(2)} &#8491;, ${(b.identity*100).toFixed(1)}% identity</span>`;
       document.getElementById("bestSeq").textContent = b.sequence;
+      // Both structures for the MD screen, from the same predictor.
+      fetchSearchStructures(searchJob);
     } else if (b && b.sc_rmsd !== null) {
       head = `<span class="badge fail">NOT FOUND</span>
         <span class="hint" style="margin-left:8px;">closest was

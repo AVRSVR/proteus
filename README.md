@@ -290,6 +290,60 @@ Every RMSD is superposed with Kabsch first, including a determinant correction s
 
 ---
 
+## Does it hold together? A short MD screen
+
+Every other check here is a score or a structure prediction. This one is
+physics: both structures go into a forcefield, move for a few tens of
+picoseconds of implicit-solvent Langevin dynamics, and are watched for whether
+they expand.
+
+```
+                 Rg mean   Rg drift   noise floor   runs
+input            11.42 A   +0.021 A      0.038 A      3
+design           11.39 A   +0.014 A      0.031 A      3
+-> indistinguishable: the 0.007 A difference in drift is inside the
+   0.038 A spread between replicates of the same structure
+```
+
+**This is not a free-energy calculation, and the module says so in its own
+docstring.** Holding its shape for 45 ps is evidence that nothing obviously
+broke. A protein can sit perfectly still for the whole trajectory and still be
+less stable than the one it replaced. A fail here is real; a pass is weak.
+
+Three things separate this from a coin flip, and all three cost something:
+
+- **Replicates, not one run each.** A single trajectory's drift is dominated
+  by which velocities it happened to start with. The spread across replicates
+  of the *same* structure is the noise floor, and a before/after difference
+  smaller than it is reported as `indistinguishable` rather than resolved in
+  whichever direction the means fell. This is the whole reason the module
+  exists rather than a twenty-line script.
+- **Drift skips the first quarter of the window.** It is the last quarter
+  minus the *second*, not minus the first. Five picoseconds of equilibration
+  does not always finish settling a predicted structure into the forcefield,
+  and one early jump followed by a flat trajectory is the minimiser letting
+  go, not the protein coming apart. Measured from frame zero that reads as
+  drift equal to the whole jump — a test asserts it now reads as zero.
+- **The pairing is honest.** The "before" structure is ESMFold's model of the
+  *unmutated* sequence, kept from the search's baseline fold, not the uploaded
+  crystal or predicted input. Comparing an ESMFold model against a crystal
+  structure would measure the difference between two modelling methods as much
+  as the difference between two sequences. When no baseline fold is available
+  the UI falls back to the uploaded structure and says plainly that the
+  comparison is no longer paired.
+
+Needs OpenMM and PDBFixer, which are conda packages rather than wheels:
+
+```bash
+conda install -c conda-forge openmm pdbfixer
+```
+
+The hosted build does not carry them, so the panel there explains why instead
+of offering a button that can only fail. Capped at 200 residues — past that the
+wait stops being worth what a run this short can tell you.
+
+---
+
 ## A negative result worth keeping
 
 Protein language model likelihood looks like a cheap way to check a designed sequence is plausible. It was tested and rejected.
