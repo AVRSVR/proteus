@@ -245,3 +245,28 @@ def test_no_strategy_diagnoses_more_than_two_thirds_of_a_protein():
     for strat in REGISTRY.for_context(ctx):
         n = len(strat.diagnose(ctx))
         assert n <= 0.67 * len(ctx), f"{strat.name} diagnosed {n} of {len(ctx)}"
+
+
+def test_packed_aromatics_are_not_stripped_for_helix_propensity():
+    """A buried ring is paying for its propensity with packing.
+
+    Chou-Fasman rates tyrosine at 0.69, so buried tyrosines look like free
+    stability to recover. On a three-helix design replacing the five packed
+    ones collapsed the predicted fold from 1.2 A to 27 A.
+    """
+    ctx = ctx_with("YAAAEKAAEKYAAEKAAEKA")
+    strat = REGISTRY.get("helix_propensity")
+    for p in strat.diagnose(ctx):
+        if ctx.aa(p) in "FWY":
+            assert ctx.layer(p) == "surface", (
+                f"{ctx.aa(p)}{p} is {ctx.layer(p)} and should be left alone")
+
+
+def test_exposed_aromatics_are_still_fair_game():
+    """On the surface there is nothing to pack against, so the rule applies."""
+    from proteus.strategies.soluble import HelixPropensity
+    ctx = ctx_with("YAAAEKAAEKYAAEKAAEKA")
+    exposed = [p for p in ctx.positions
+               if ctx.aa(p) in "FWY" and ctx.layer(p) == "surface"]
+    for p in exposed:
+        assert not HelixPropensity._earns_its_place(ctx, p)

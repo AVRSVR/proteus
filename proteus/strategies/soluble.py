@@ -441,7 +441,25 @@ class HelixPropensity(Strategy):
     def diagnose(self, ctx: DesignContext) -> list[int]:
         poor = self.POOR
         return [p for p in ctx.designable
-                if ctx.ss_at(p) == "H" and ctx.aa(p) in poor]
+                if ctx.ss_at(p) == "H" and ctx.aa(p) in poor
+                and not self._earns_its_place(ctx, p)]
+
+    @staticmethod
+    def _earns_its_place(ctx: DesignContext, position: int) -> bool:
+        """Is this residue paying for its poor propensity with packing?
+
+        Chou-Fasman rates tyrosine at 0.69 and tryptophan at 1.08 on helix
+        propensity, so a buried tyrosine looks like free stability to recover.
+        It is not. On a three-helix design the five packed tyrosines were all
+        flagged here, and replacing them collapsed the predicted fold from
+        1.2 A to 27 A -- the ring was holding the helices against each other,
+        which is worth far more than the propensity it costs.
+
+        An aromatic that is not solvent-exposed is therefore left alone. On the
+        surface there is nothing for the ring to pack against and the ordinary
+        propensity argument applies.
+        """
+        return ctx.aa(position) in "FWY" and ctx.layer(position) != "surface"
 
     def propose(self, ctx, positions, rng):
         out = []
