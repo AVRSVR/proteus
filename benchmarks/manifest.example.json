@@ -1,0 +1,10 @@
+{
+  "designed": [
+    {"label": "my_design_v1", "path": "path/to/design_v1.pdb"},
+    {"label": "my_design_v2", "path": "path/to/design_v2.pdb"}
+  ],
+  "natural": [
+    {"label": "2A3D", "path": "path/to/2a3d.pdb"},
+    {"label": "PGK1", "path": "path/to/pgk1.pdb"}
+  ]
+}

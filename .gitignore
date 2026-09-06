@@ -17,3 +17,7 @@ webapp/server.log
 benchmarks/s669/pdb/
 benchmarks/ddg_results.csv
 benchmarks/fitted_weights.npy
+
+# Local input to benchmarks/specificity.py: absolute paths to structures
+# on one machine. See manifest.example.json for the shape.
+benchmarks/manifest.json
