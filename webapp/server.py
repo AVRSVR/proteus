@@ -31,6 +31,39 @@ def _load(pdb_text, chain, membrane):
     return DesignContext(structure=structure, membrane=mem), structure
 
 
+def _parse_freeze(spec):
+    """Parse "1-10,47,53-60" into a frozenset of residue numbers."""
+    if not spec:
+        return frozenset()
+    out = set()
+    for chunk in str(spec).split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            lo, hi = chunk.split("-", 1)
+            out.update(range(int(lo), int(hi) + 1))
+        else:
+            out.add(int(chunk))
+    return frozenset(out)
+
+
+def _scorer_for(which, chain):
+    """Build the requested scorer, or None for the hand-tuned default.
+
+    Returning None rather than HeuristicScorer() matters: the engine treats a
+    missing scorer as "use the default and its calibrated threshold", which is
+    the only combination whose gain threshold was measured rather than derived.
+    """
+    which = (which or "heuristic").lower()
+    if which == "fitted":
+        return FittedScorer()
+    if which in ("mpnn", "proteinmpnn"):
+        _mpnn.require()
+        return _mpnn.MPNNSequenceScorer(chain=chain or None)
+    return None
+
+
 @app.post("/api/analyze")
 def analyze():
     data = request.get_json(force=True)
@@ -147,18 +180,10 @@ def run():
     data = request.get_json(force=True)
     try:
         ctx, structure = _load(data["pdb"], data.get("chain"), data.get("membrane"))
-        frozen = frozenset()
-        if data.get("freeze"):
-            frozen = set()
-            for chunk in data["freeze"].split(","):
-                chunk = chunk.strip()
-                if "-" in chunk:
-                    lo, hi = chunk.split("-")
-                    frozen.update(range(int(lo), int(hi) + 1))
-                elif chunk:
-                    frozen.add(int(chunk))
-            frozen = frozenset(frozen)
-            ctx = DesignContext(structure=structure, membrane=ctx.membrane, frozen=frozen)
+        frozen = _parse_freeze(data.get("freeze"))
+        if frozen:
+            ctx = DesignContext(structure=structure, membrane=ctx.membrane,
+                                frozen=frozen)
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"error": str(exc)}), 400
@@ -395,6 +420,189 @@ def fold():
             traceback.print_exc()
             result["compare_error"] = str(exc)
     return jsonify(result)
+
+
+# ------------------------------------------------------------ search loop
+#
+# Propose, fold, check, and retry with a smaller edit until something folds.
+# Runs as a background job because a single fold can take minutes and thirty
+# of them will not fit inside a request.
+SEARCH_JOBS: dict[str, dict] = {}
+SEARCH_LOCK = threading.Lock()
+
+#: Per-fold retry budget inside the loop. Deliberately smaller than the
+#: standalone fold endpoint uses: there the user is waiting on one answer, here
+#: a stuck fold blocks every remaining attempt, so it is better to give up on
+#: one candidate quickly and come back to folding on the next.
+SEARCH_FOLD_ATTEMPTS = 3
+
+
+def _search_worker(job_id: str, pdb_text: str, chain: str | None,
+                   membrane: bool, frozen, which: str, chosen,
+                   max_attempts: int, generations: int, budget: float,
+                   rmsd_cutoff: float, deadline: float) -> None:
+    from proteus.search import search as run_search
+
+    def publish(**kw):
+        with SEARCH_LOCK:
+            SEARCH_JOBS[job_id].update(kw)
+
+    try:
+        ctx, structure = _load(pdb_text, chain, membrane)
+        if frozen:
+            ctx = DesignContext(structure=structure, membrane=ctx.membrane,
+                                frozen=frozen)
+        scorer = _scorer_for(which, chain)
+    except Exception as exc:
+        traceback.print_exc()
+        publish(state="failed", error=str(exc))
+        return
+
+    reference = structure
+
+    def fold_and_check(sequence):
+        if time.time() > deadline:
+            return None, None, False, "time budget exhausted"
+        pdb_out, err = fold_with_esmfold(sequence, attempts=SEARCH_FOLD_ATTEMPTS)
+        if not pdb_out:
+            return None, None, False, (err or "fold unavailable")[:120]
+        try:
+            tmp = Path(tempfile.gettempdir()) / f"proteus_search_{job_id}.pdb"
+            tmp.write_text(pdb_out, encoding="utf-8")
+            predicted = from_pdb(str(tmp))
+            if len(predicted) != len(reference):
+                return None, None, False, "length mismatch"
+            check = PredictedStructureGate(
+                predicted, rmsd_cutoff=rmsd_cutoff
+            ).check(predicted.sequence, reference)
+            with SEARCH_LOCK:
+                SEARCH_JOBS[job_id]["last_pdb"] = pdb_out
+            return check.sc_rmsd, check.plddt, check.passed, check.reason
+        except Exception as exc:
+            return None, None, False, str(exc)[:120]
+
+    # Fold the input sequence first. If the design does not refold to its own
+    # backbone, no edit to it can, and every attempt below would spend minutes
+    # proving the same thing. This has happened on a real input: an earlier
+    # prototype output measured 3.62 A and pLDDT 64.7 unmutated, so its search
+    # could never have succeeded regardless of what the strategies proposed.
+    publish(phase="baseline")
+    base_rmsd, base_plddt, base_passed, base_note = fold_and_check(
+        structure.sequence)
+    publish(baseline={"sc_rmsd": base_rmsd, "plddt": base_plddt,
+                      "passed": base_passed, "note": base_note})
+    if base_rmsd is not None and not base_passed:
+        publish(state="done", found=False, n_folded=1,
+                stopped_because=(
+                    "the input sequence does not refold to its own backbone "
+                    f"(scRMSD {base_rmsd:.2f} A"
+                    + (f", pLDDT {base_plddt:.1f}" if base_plddt is not None else "")
+                    + "). No edit can repair a structure that was not "
+                    "self-consistent to begin with, so the search was not run."),
+                start_sequence=structure.sequence, best=None)
+        return
+    publish(phase="searching")
+
+    def on_attempt(a):
+        with SEARCH_LOCK:
+            job = SEARCH_JOBS[job_id]
+            job["attempts"].append({
+                "index": a.index, "n_mutations": a.n_mutations,
+                "identity": a.identity, "improvement": a.improvement,
+                "sc_rmsd": a.sc_rmsd, "plddt": a.plddt,
+                "passed": a.passed, "note": a.note,
+                "budget": a.mutation_budget,
+            })
+            if a.passed:
+                job["winner_pdb"] = job.get("last_pdb")
+
+    def should_stop():
+        with SEARCH_LOCK:
+            return SEARCH_JOBS[job_id].get("cancel") or time.time() > deadline
+
+    try:
+        res = run_search(ctx, fold_and_check, max_attempts=max_attempts,
+                         generations=generations, start_budget=budget,
+                         scorer=scorer, allowed_strategies=chosen,
+                         should_stop=should_stop, on_attempt=on_attempt)
+    except Exception as exc:
+        traceback.print_exc()
+        publish(state="failed", error=str(exc))
+        return
+
+    best = res.winner or res.closest
+    publish(state="done",
+            stopped_because=res.stopped_because,
+            n_folded=res.n_folded,
+            found=res.winner is not None,
+            best=None if best is None else {
+                "sequence": best.sequence, "n_mutations": best.n_mutations,
+                "identity": best.identity, "improvement": best.improvement,
+                "sc_rmsd": best.sc_rmsd, "plddt": best.plddt,
+                "passed": best.passed, "index": best.index,
+            },
+            start_sequence=structure.sequence)
+
+
+@app.post("/api/search/start")
+def search_start():
+    data = request.get_json(force=True)
+    try:
+        frozen = _parse_freeze(data.get("freeze"))
+    except Exception as exc:
+        return jsonify({"error": f"could not parse freeze: {exc}"}), 400
+
+    which = (data.get("scorer") or "heuristic").lower()
+    if which in ("mpnn", "proteinmpnn") and not _mpnn.available():
+        return jsonify({"error": "ProteinMPNN is not installed here."}), 400
+
+    max_attempts = max(1, min(int(data.get("max_attempts", 30)), 50))
+    minutes = max(1, min(int(data.get("max_minutes", 45)), 180))
+    job_id = uuid.uuid4().hex[:12]
+    with SEARCH_LOCK:
+        SEARCH_JOBS[job_id] = {"state": "running", "attempts": [],
+                               "max_attempts": max_attempts}
+    threading.Thread(
+        target=_search_worker, daemon=True,
+        args=(job_id, data["pdb"], data.get("chain") or None,
+              bool(data.get("membrane")), frozen, which,
+              data.get("strategies") or None, max_attempts,
+              int(data.get("generations", 40)),
+              float(data.get("mutation_budget", 0.15)),
+              float(data.get("rmsd", 2.0)),
+              time.time() + minutes * 60)).start()
+    return jsonify({"job": job_id, "max_attempts": max_attempts,
+                    "max_minutes": minutes})
+
+
+@app.get("/api/search/status/<job_id>")
+def search_status(job_id):
+    with SEARCH_LOCK:
+        job = SEARCH_JOBS.get(job_id)
+        if job is None:
+            return jsonify({"error": "unknown job"}), 404
+        # last_pdb can be large; it is fetched separately when wanted.
+        return jsonify({k: v for k, v in job.items()
+                        if k not in ("last_pdb", "winner_pdb")})
+
+
+@app.post("/api/search/cancel/<job_id>")
+def search_cancel(job_id):
+    with SEARCH_LOCK:
+        if job_id not in SEARCH_JOBS:
+            return jsonify({"error": "unknown job"}), 404
+        SEARCH_JOBS[job_id]["cancel"] = True
+    return jsonify({"cancelled": True})
+
+
+@app.get("/api/search/structure/<job_id>")
+def search_structure(job_id):
+    with SEARCH_LOCK:
+        job = SEARCH_JOBS.get(job_id) or {}
+        pdb_out = job.get("winner_pdb") or job.get("last_pdb")
+    if not pdb_out:
+        return jsonify({"error": "no folded structure for this job yet"}), 404
+    return jsonify({"pdb": pdb_out})
 
 
 @app.post("/api/validate")

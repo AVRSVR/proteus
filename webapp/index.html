@@ -320,6 +320,34 @@
       input backbone. Takes a few seconds. It is a shared service and is sometimes down &mdash;
       the manual route below always works.</div>
     <div id="foldResult" style="margin-top:12px;"></div>
+
+    <div style="border-top:1px solid var(--line-soft); margin-top:16px; padding-top:14px;">
+      <div style="font-size:12.5px; font-weight:600; color:var(--bark);">
+        Keep trying until it folds</div>
+      <div class="hint" style="line-height:1.5; margin-bottom:8px;">
+        A single run usually fails this check, and the usual reason is not that the
+        mutations were bad but that there were too many at once. This loops:
+        propose, fold, check, and if it fails, propose again with a smaller edit.
+        It folds the input first &mdash; if that does not refold to its own backbone,
+        no edit can, and it stops there rather than burning attempts.
+      </div>
+      <div class="grid g3" style="max-width:560px;">
+        <div class="field">
+          <label for="maxAttempts">Attempts</label>
+          <input type="number" id="maxAttempts" value="30" min="1" max="50">
+          <div class="hint">Stops at the first pass.</div>
+        </div>
+        <div class="field">
+          <label for="maxMinutes">Time limit (min)</label>
+          <input type="number" id="maxMinutes" value="45" min="1" max="180">
+          <div class="hint">Folding is slow and unreliable; this caps the whole loop.</div>
+        </div>
+      </div>
+      <button class="act" onclick="startSearch()" id="searchBtn">Search until it folds</button>
+      <button class="act ghost" onclick="cancelSearch()" id="cancelBtn"
+              style="display:none;">Stop</button>
+      <div id="searchResult" style="margin-top:12px;"></div>
+    </div>
     <details class="raw" style="margin-top:16px;"><summary>or fold elsewhere and upload the result</summary>
     <div class="upload" id="dropPred" onclick="document.getElementById('predFile').click()">
       <div class="big" id="predTitle">Choose predicted structure</div>
@@ -658,6 +686,106 @@ function downloadFold() {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = "proteus_folded.pdb";
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+
+let searchJob = null, searchPoll = null;
+
+async function startSearch() {
+  const out = document.getElementById("searchResult");
+  const seq = document.getElementById("bestSeq").textContent.trim();
+  if (!pdbText) { out.innerHTML = '<span class="hint">Load a structure first.</span>'; return; }
+  document.getElementById("searchBtn").disabled = true;
+  document.getElementById("cancelBtn").style.display = "";
+  out.innerHTML = '<span class="hint">Starting&hellip;</span>';
+  const t0 = Date.now();
+  try {
+    const body = {
+      pdb: pdbText, chain: chainVal, membrane: memVal,
+      freeze: document.getElementById("freeze").value.trim(),
+      generations: document.getElementById("generations").value,
+      scorer: document.getElementById("scorerSel").value,
+      max_attempts: document.getElementById("maxAttempts").value,
+      max_minutes: document.getElementById("maxMinutes").value,
+    };
+    if (mode === "manual") body.strategies = [...picked];
+    const d = await (await fetch("/api/search/start", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)})).json();
+    if (d.error) { out.innerHTML = `<span style="color:var(--rust)">${d.error}</span>`;
+                   endSearch(); return; }
+    searchJob = d.job;
+    if (searchPoll) clearInterval(searchPoll);
+    searchPoll = setInterval(() => pollSearch(t0, d), 3000);
+  } catch (e) { out.innerHTML = "Request failed: " + e; endSearch(); }
+}
+
+function endSearch() {
+  if (searchPoll) { clearInterval(searchPoll); searchPoll = null; }
+  document.getElementById("searchBtn").disabled = false;
+  document.getElementById("cancelBtn").style.display = "none";
+}
+
+async function cancelSearch() {
+  if (!searchJob) return;
+  await fetch(`/api/search/cancel/${searchJob}`, {method:"POST"});
+}
+
+function attemptRows(list) {
+  if (!list.length) return "";
+  let h = `<table><thead><tr><th>#</th><th>Mutations</th><th>scRMSD</th>
+           <th>pLDDT</th><th>Result</th></tr></thead><tbody>`;
+  list.slice().reverse().slice(0, 12).forEach(a => {
+    const rm = a.sc_rmsd === null ? "&mdash;" : a.sc_rmsd.toFixed(2) + " &#8491;";
+    const pl = a.plddt === null || a.plddt === undefined ? "&mdash;" : a.plddt.toFixed(1);
+    const v = a.sc_rmsd === null
+      ? `<span class="hint">${a.note || "no fold"}</span>`
+      : (a.passed ? '<span class="badge pass">PASS</span>'
+                  : '<span class="badge fail">fail</span>');
+    h += `<tr><td class="mono">${a.index}</td><td class="mono">${a.n_mutations}</td>
+          <td class="mono">${rm}</td><td class="mono">${pl}</td><td>${v}</td></tr>`;
+  });
+  return h + "</tbody></table>";
+}
+
+async function pollSearch(t0, meta) {
+  const out = document.getElementById("searchResult");
+  try {
+    const s = await (await fetch(`/api/search/status/${searchJob}`)).json();
+    const secs = Math.round((Date.now() - t0) / 1000);
+    const n = (s.attempts || []).length;
+
+    if (s.state === "running") {
+      const phase = s.phase === "baseline"
+        ? "folding the input first, to check the search is worth running"
+        : `attempt ${n} of ${meta.max_attempts}`;
+      out.innerHTML = `<span class="hint">${phase} &mdash; ${secs}s elapsed.
+        Each fold can take minutes; you can keep using the page or stop.</span>`
+        + attemptRows(s.attempts || []);
+      return;
+    }
+
+    endSearch();
+    if (s.state === "failed") {
+      out.innerHTML = `<span style="color:var(--rust)">${s.error}</span>`; return;
+    }
+
+    const b = s.best;
+    let head;
+    if (s.found && b) {
+      head = `<span class="badge pass">FOUND</span>
+        <span class="mono" style="margin-left:8px;">${b.n_mutations} mutations,
+        scRMSD ${b.sc_rmsd.toFixed(2)} &#8491;, ${(b.identity*100).toFixed(1)}% identity</span>`;
+      document.getElementById("bestSeq").textContent = b.sequence;
+    } else if (b && b.sc_rmsd !== null) {
+      head = `<span class="badge fail">NOT FOUND</span>
+        <span class="hint" style="margin-left:8px;">closest was
+        ${b.n_mutations} mutations at scRMSD ${b.sc_rmsd.toFixed(2)} &#8491;</span>`;
+    } else {
+      head = `<span class="badge fail">NOT FOUND</span>`;
+    }
+    out.innerHTML = head +
+      `<div class="hint" style="margin-top:5px;">${s.stopped_because || ""}</div>` +
+      attemptRows(s.attempts || []);
+  } catch (e) { out.innerHTML = "Polling failed: " + e; endSearch(); }
 }
 
 let libLoaded = false;
