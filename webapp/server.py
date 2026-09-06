@@ -23,10 +23,37 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+#: Below this there is not enough structure to diagnose a mechanism against.
+#: Burial, secondary-structure segments and packing all need neighbours; a
+#: short peptide has none, and every gate would either fire on everything or
+#: nothing. Refusing is more honest than returning a confident empty answer.
+MIN_RESIDUES = 20
+
+
 def _load(pdb_text, chain, membrane):
     tmp = Path(tempfile.gettempdir()) / "proteus_web_input.pdb"
     tmp.write_text(pdb_text, encoding="utf-8")
-    structure = from_pdb(str(tmp), chain=chain or None)
+    try:
+        structure = from_pdb(str(tmp), chain=chain or None)
+    except ValueError as exc:
+        # Biopython raises a bare int() conversion error on two common inputs,
+        # and the raw message names neither the file nor the cause. A solvated
+        # system past 99,999 atoms switches to hybrid-36 numbering ("A000"),
+        # which its parser cannot read.
+        if "invalid literal for int()" in str(exc):
+            raise ValueError(
+                "this file's atom or residue numbering could not be read. It is "
+                "usually a solvated or topology file past 99,999 atoms, which "
+                "switches to a numbering scheme the parser does not support. "
+                "Strip the waters and ions and upload the protein alone."
+            ) from exc
+        raise
+    if len(structure) < MIN_RESIDUES:
+        raise ValueError(
+            f"only {len(structure)} residues with a complete N/CA/C backbone "
+            f"were found; at least {MIN_RESIDUES} are needed to diagnose a "
+            "mechanism. Check the chain selection, and note that residues "
+            "missing backbone atoms are dropped rather than guessed at.")
     mem = membrane_mod.estimate(structure) if membrane else None
     return DesignContext(structure=structure, membrane=mem), structure
 
