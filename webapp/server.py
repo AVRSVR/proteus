@@ -86,8 +86,8 @@ def analyze():
         # context that says how much to trust it. Both are |Pearson r| against
         # 669 experimental ddG values (S669), 10-fold CV grouped by protein.
         "accuracy": {
-            "heuristic_r": 0.125,
-            "fitted_r": 0.296,
+            "heuristic_r": 0.179,
+            "fitted_r": 0.303,
             "mpnn_r": 0.331,
             "mpnn_available": _mpnn.available(),
             "best_published_r": 0.460,
@@ -514,6 +514,12 @@ def _search_worker(job_id: str, pdb_text: str, chain: str | None,
                 "sc_rmsd": a.sc_rmsd, "plddt": a.plddt,
                 "passed": a.passed, "note": a.note,
                 "budget": a.mutation_budget,
+                "layers": list(a.layers),
+                # Kept so a failure can be traced back to the exact edit.
+                # Without it a 27 A result is a number with no explanation,
+                # and reconstructing the attempt from its index reproduces
+                # different mutations than the run actually made.
+                "sequence": a.sequence,
             })
             if a.passed:
                 job["winner_pdb"] = job.get("last_pdb")

@@ -443,25 +443,31 @@ class RosettaScorer(Scorer):
 # number is 0.311 and is inflated by mutations from the same protein leaking
 # across the split.
 #
-#   hand-tuned weights   |r| = 0.125
-#   these weights        |r| = 0.296
+#   hand-tuned weights   |r| = 0.179
+#   these weights        |r| = 0.303
 #
 # For scale, published predictors on the same 669 rows reach |r| 0.40-0.46
 # (ACDC-NN 0.460, DDGun3D 0.432, INPS3D 0.430, RaSP 0.403, ProteinMPNN-ddG
 # 0.398), and FoldX reaches 0.214. So this is a real improvement that remains
 # clearly short of the state of the art, and should be described that way.
+#
+# Refitted after the burial measure was corrected to blend an isotropic
+# neighbour count into the cone. That change alone lifted the hand-tuned
+# scorer from 0.125 to 0.179, which is a reminder that these weights are only
+# valid for the geometry they were fitted against: changing how burial is
+# computed changes what every term means, and the fit has to be redone.
 FITTED_DDG_WEIGHTS = {
-    "interactions": 1.3791,
-    "ss_propensity": 1.0220,
-    "bb_entropy": -0.2830,
-    "burial": 0.2791,
-    "liabilities": 0.1433,
-    "capping": 0.1245,
-    "packing": 0.1050,
-    "aggregation": -0.0864,
-    "net_charge": 0.0731,
+    "interactions": 0.9619,
+    "ss_propensity": 0.8798,
+    "packing": 0.3600,
+    "bb_entropy": -0.1250,
+    "burial": 0.0975,
+    "capping": 0.0800,
+    "net_charge": 0.0749,
+    "liabilities": -0.0527,
+    "aggregation": -0.0098,
 }
-FITTED_DDG_INTERCEPT = 0.8541
+FITTED_DDG_INTERCEPT = 0.7981
 
 
 class FittedScorer(HeuristicScorer):
@@ -469,8 +475,8 @@ class FittedScorer(HeuristicScorer):
 
     Computes exactly the same nine terms as its parent, then combines them with
     weights regressed against measured stability changes instead of chosen by
-    hand. On the S669 benchmark this roughly doubles rank correlation with
-    experiment (Spearman 0.165 -> 0.303).
+    hand. On the S669 benchmark this lifts rank correlation with experiment
+    from Spearman 0.269 to 0.314.
 
     Two things to keep in mind when using it:
 

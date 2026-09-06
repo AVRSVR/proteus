@@ -23,8 +23,33 @@ DIST_MIDPOINT = 9.0
 DIST_STEEPNESS = 1.0
 ANGLE_SHIFT = 0.5
 ANGLE_EXPONENT = 2.0
-CORE_CUTOFF = 5.2
-SURFACE_CUTOFF = 2.0
+
+# Weight of the direction-free neighbour count blended into the cone.
+#
+# The cone alone answers "is this sidechain pointing into protein", which is
+# not the same question as "is this residue packed". Its angular term is
+# ((cos t + 0.5) / 1.5) ** 2, so a neighbour more than 120 degrees off the
+# CA->CB axis contributes exactly nothing and one at 90 degrees contributes
+# 0.11. A residue on a helix-packing face often has the neighbouring helix in
+# precisely that discarded arc.
+#
+# Measured on a three-helix design: W11 sits 6.5 A from the molecular centre
+# with 17 neighbours inside 10 A and scored 1.98, while a genuinely exposed
+# lysine 27 A out with 5 neighbours scored 0.68. The two were nearly
+# indistinguishable, and mutating W11 collapsed the fold from 1.2 A to 27 A
+# while the classifier called it surface.
+#
+# Blending in an isotropic term fixes the ordering without discarding the
+# directional signal, which is still worth most of the weight. At 0.15 the
+# fold-critical positions separate from genuinely exposed ones while the
+# global layer proportions stay where they were.
+ISOTROPIC_WEIGHT = 0.15
+
+# Cutoffs are set from the distribution over 23 natural proteins (S669), at
+# the percentiles that give roughly a fifth core and two fifths surface --
+# the proportions a globular protein is expected to show.
+CORE_CUTOFF = 7.0
+SURFACE_CUTOFF = 2.8
 
 
 def sidechain_neighbors(structure: Structure) -> np.ndarray:
@@ -32,9 +57,14 @@ def sidechain_neighbors(structure: Structure) -> np.ndarray:
 
     For residue *i* the sidechain direction is CA->CB. Every other residue *j*
     contributes a product of two terms: a sigmoid in the CB_i->CA_j distance,
-    and an angular term that weights neighbours lying in the cone the sidechain
-    actually points into. A residue with lots of protein packed in front of its
-    sidechain scores high even if it sits far from the molecular centre.
+    and an angular term weighting neighbours in the cone the sidechain points
+    into. A residue with protein packed in front of its sidechain scores high
+    even when it sits far from the molecular centre.
+
+    The cone is then blended with the same distance term summed over every
+    neighbour regardless of direction. On its own the cone answers a narrower
+    question than the one burial is asked -- see :data:`ISOTROPIC_WEIGHT` for
+    the case that made the difference matter.
     """
     ca = structure.coords("ca")
     cb = structure.coords("cb")
@@ -63,7 +93,9 @@ def sidechain_neighbors(structure: Structure) -> np.ndarray:
     angle_term = np.clip((cos_theta + ANGLE_SHIFT) / (1.0 + ANGLE_SHIFT), 0.0, 1.0)
     angle_term = angle_term ** ANGLE_EXPONENT
 
-    return (dist_term * angle_term).sum(axis=1)
+    directional = (dist_term * angle_term).sum(axis=1)
+    isotropic = dist_term.sum(axis=1)
+    return directional + ISOTROPIC_WEIGHT * isotropic
 
 
 def layers(
