@@ -1,0 +1,21 @@
+# Render blueprint for the Proteus web app.
+#
+# One worker, several threads. Fold and search jobs live in per-process dicts
+# (FOLD_JOBS / SEARCH_JOBS in webapp/server.py) and are driven by background
+# threads, so a second worker would serve polls from a process that never saw
+# the job and report it missing. Threads are the right axis to scale here
+# anyway: every request spends its time waiting on the ESMFold API.
+#
+# The timeout is generous because a search holds its thread for the whole run,
+# and FOLD_MAX_MINUTES allows 8 minutes per fold.
+services:
+  - type: web
+    name: proteus
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --chdir webapp server:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 600
+    healthCheckPath: /api/strategies
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"

@@ -66,6 +66,51 @@ sequence identity: 87.9% retained
 
 ---
 
+## The web app
+
+The same engine behind a browser UI: load a structure, see which mechanisms the
+fold admits, run a search, and check the result actually refolds.
+
+```bash
+pip install -r requirements.txt
+python webapp/server.py            # http://127.0.0.1:8420
+```
+
+`PORT` and `HOST` are read from the environment if you need to move it.
+
+Folding is delegated to the public **ESMFold API** rather than a local model,
+which is what keeps the deployment small enough to be free. The consequence is
+that the fold gate depends on a third-party service: when it is down or rate
+limiting, folds fail and the app says so instead of pretending. Folds run as
+background jobs the browser polls, so a slow one does not hold a request open.
+
+### Deploying
+
+`render.yaml` is a working Render blueprint — point Render at the repo and it
+builds from `requirements.txt`.
+
+Two details in it are load-bearing rather than cosmetic:
+
+- **One worker, eight threads.** Fold and search jobs live in per-process
+  dictionaries driven by background threads. A second worker would serve a
+  status poll from a process that never saw the job and report it missing.
+  Threads are the right axis anyway, since almost all of the wall time is spent
+  waiting on the ESMFold API.
+- **A 600-second timeout.** A search holds its worker thread for the whole run,
+  and a single fold is allowed eight minutes.
+
+`requirements.txt` deliberately omits torch. ProteinMPNN scoring is detected at
+import (`proteus.mpnn.available`) and the two analytic scorers are used when it
+is missing — so the hosted build runs without it and the UI reports MPNN as
+unavailable rather than failing. Installing `torch` and `proteinmpnn` in the
+environment is all that is needed to turn it on, at roughly 900 MB, which is
+past what a free instance will hold.
+
+Free-tier instances sleep when idle, so the first request after a pause pays a
+cold start.
+
+---
+
 ## How it works
 
 ```
@@ -209,7 +254,7 @@ Every strategy was run in isolation on a validated de novo design, a prototype o
 - **The membrane estimator needs a plausible starting sequence.** It locates the bilayer from exposed hydrophobicity. If the design under repair has that backwards — exactly the case Proteus exists to fix — the estimate is unreliable. Supply an OPM-oriented structure, or an explicit `MembraneModel`. There is a test asserting this failure mode rather than hiding it.
 - **Credit assignment is joint.** When two mechanisms are applied together and the result improves, both are rewarded. Raw per-arm history is retained so the ambiguity can be analysed.
 - **The knowledge base is only as good as the objective.** It faithfully learns which mechanisms improve `HeuristicScorer`. Whether that tracks real stability is the open question, and matters more than adding more strategies.
-- **Nothing here verifies the fold.** No refold check, no energy function. A run tells you the design improved on a readable heuristic; it does not tell you the sequence still folds. That gate was built, could not run on the development machine, and was removed rather than shipped untested — it is in git history at `350f04f`.
+- **The optimiser itself still cannot see the fold.** The scorer knows nothing about whether a sequence folds; that check is a separate gate applied afterwards, and the search loop exists precisely because the optimiser proposes sequences the gate then rejects. The loop makes the failure recoverable, not absent — a design that passes has been refolded and measured, but the objective driving the search remains a heuristic that a determined optimiser can walk away from.
 
 ---
 
@@ -283,7 +328,7 @@ The honest reading is not "specificity is proven." It is "a discriminating signa
 ## Tests
 
 ```bash
-pytest -q     # 83 tests
+pytest -q     # 162 tests
 ```
 
 Tests run against synthetic structures built from ideal φ/ψ via NeRF, so the geometry has a known answer by construction rather than depending on downloaded PDBs.

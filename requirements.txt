@@ -1,0 +1,10 @@
+# Runtime dependencies for the hosted web app.
+#
+# Deliberately small. Folding is done by the remote ESMFold API rather than a
+# local model, so nothing here needs torch or a GPU. ProteinMPNN scoring is
+# optional and detected at runtime (proteus.mpnn.available); when torch is
+# absent the app runs with the two analytic scorers and says so in the UI.
+numpy>=1.24,<3
+biopython>=1.81
+flask>=3.0
+gunicorn>=21.2

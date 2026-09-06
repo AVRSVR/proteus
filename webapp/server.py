@@ -642,4 +642,8 @@ def validate():
 
 
 if __name__ == "__main__":
-    app.run(port=8420, debug=False)
+    # Local development only. In a deployment gunicorn imports `app` directly
+    # and this block never runs -- see render.yaml for the served command.
+    import os
+    app.run(host=os.environ.get("HOST", "127.0.0.1"),
+            port=int(os.environ.get("PORT", 8420)), debug=False)
