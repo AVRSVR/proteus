@@ -2,6 +2,10 @@
 
 **A strategy library for stabilizing designed proteins — soluble and membrane-embedded.**
 
+**[Live demo](https://proteus-5kpn.onrender.com/)** · **[Source](https://github.com/AVRSVR/proteus)**
+
+*(Hosted on Render's free tier — the instance sleeps when idle, so the first request after a pause pays a ~30s cold start.)*
+
 Generative models produce protein backbones and sequences that look right. Whether they *hold together* is a separate question. Proteus is the layer after generation: given a structure, it diagnoses which stabilization mechanisms the fold actually admits, applies them, and keeps a record of which ones earned their place.
 
 The distinguishing idea is that Proteus reasons at the level of **mechanisms**, not mutations. Most stability tooling asks "what is ΔΔG for L47I?". Proteus asks "does this fold have an underpacked core, an exposed hydrophobic patch, or an uncapped helix — and which of those is worth fixing here?" That abstraction is interpretable, and unlike a per-mutation model it can transfer between proteins.
