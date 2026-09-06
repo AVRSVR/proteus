@@ -11,6 +11,8 @@ proteus analyze design.pdb --membrane
 proteus run design.pdb --freeze 1-10,47-53 --generations 60
 ```
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/AVRSVR/proteus)
+
 ---
 
 ## Why membrane proteins are a first-class path
@@ -86,8 +88,11 @@ background jobs the browser polls, so a slow one does not hold a request open.
 
 ### Deploying
 
-`render.yaml` is a working Render blueprint — point Render at the repo and it
-builds from `requirements.txt`.
+`render.yaml` is a working Render blueprint. The **Deploy to Render** button
+above reads it directly — click it, connect the GitHub repo, and Render builds
+from `requirements.txt`. Deploying manually is the same thing without the
+button: create a Blueprint instance in the Render dashboard and point it at
+this repo.
 
 Two details in it are load-bearing rather than cosmetic:
 
