@@ -413,13 +413,13 @@ The honest reading is not "specificity is proven." It is "a discriminating signa
 - Per-strategy credit assignment — currently joint when mechanisms are co-applied
 - Cross-protein transfer evaluated properly: does a prior from similar folds measurably beat a cold start?
 - A real energy function behind the objective, which is the limitation everything else is downstream of
-- **A molecular-dynamics stability screen**, written and parked on the `md-screen` branch rather than merged. It runs both structures through an implicit-solvent forcefield with replicates, so the spread between runs of the *same* structure sets a noise floor and a smaller before/after difference is reported as indistinguishable instead of resolved. Two measured things stop it shipping: 10 ps of dynamics on 1140 atoms takes 332 s on the CPU platform, making a default screen roughly 2.5 hours, so it needs the OpenCL path; and the synthetic test bundle starts at +6.3e6 kJ/mol and cannot be minimised, so the integration tests need a real PDB. The arithmetic deciding what a run *means* is already covered by 12 tests that need no OpenMM.
+- Free energy rather than a drift screen. The MD screen answers whether a design comes apart quickly, which is not the same question as how much free energy holds it together. Alchemical free-energy perturbation would answer the real one, at a cost this project has not paid.
 - Mutational recovery on S669: apply a known experimentally-destabilizing mutation to the wild type and measure how often the tool reverts that exact position against a random-position baseline. This is the missing piece — it would test whether the **strategies** work, where the benchmark above only tests whether the **scorer** correlates.
 
 ## Tests
 
 ```bash
-pytest -q     # 162 tests
+pytest -q     # 179 tests
 ```
 
 Tests run against synthetic structures built from ideal φ/ψ via NeRF, so the geometry has a known answer by construction rather than depending on downloaded PDBs.
