@@ -290,6 +290,84 @@ Every RMSD is superposed with Kabsch first, including a determinant correction s
 
 ---
 
+## Does it hold together? A short MD screen
+
+Every other check here is a score or a structure prediction. This one is
+physics: both structures go into a forcefield, move for a few tens of
+picoseconds of implicit-solvent Langevin dynamics, and are watched for whether
+they expand.
+
+The null control, which is the measurement that makes the rest of it worth
+anything -- 2A3D compared against **itself**, so every difference is thermal
+noise by construction:
+
+```
+              Rg mean   Rg drift   noise floor   RMSD    runs
+before        13.19 A   -0.086 A      0.093 A   3.88 A     3
+after         13.16 A   -0.026 A      0.085 A   3.58 A     3
+-> indistinguishable: the 0.06 A difference in drift is inside the
+   0.09 A spread between replicates of the same structure
+```
+
+A tool that reported "better" or "worse" there would be reporting noise as a
+finding, which is exactly what one run per structure would have done. The whole
+screen -- 270 ps across both structures -- took 89 seconds.
+
+**This is not a free-energy calculation, and the module says so in its own
+docstring.** Holding its shape for 45 ps is evidence that nothing obviously
+broke. A protein can sit perfectly still for the whole trajectory and still be
+less stable than the one it replaced. A fail here is real; a pass is weak.
+
+Three things separate this from a coin flip, and all three cost something:
+
+- **Replicates, not one run each.** A single trajectory's drift is dominated
+  by which velocities it happened to start with. The spread across replicates
+  of the *same* structure is the noise floor, and a before/after difference
+  smaller than it is reported as `indistinguishable` rather than resolved in
+  whichever direction the means fell. This is the whole reason the module
+  exists rather than a twenty-line script.
+- **Drift skips the first quarter of the window.** It is the last quarter
+  minus the *second*, not minus the first. Five picoseconds of equilibration
+  does not always finish settling a predicted structure into the forcefield,
+  and one early jump followed by a flat trajectory is the minimiser letting
+  go, not the protein coming apart. Measured from frame zero that reads as
+  drift equal to the whole jump — a test asserts it now reads as zero.
+- **The pairing is honest.** The "before" structure is ESMFold's model of the
+  *unmutated* sequence, kept from the search's baseline fold, not the uploaded
+  crystal or predicted input. Comparing an ESMFold model against a crystal
+  structure would measure the difference between two modelling methods as much
+  as the difference between two sequences. When no baseline fold is available
+  the UI falls back to the uploaded structure and says plainly that the
+  comparison is no longer paired.
+
+**It needs a GPU, and that is not a preference.** Measured on a 1140-atom
+structure, the CPU platform runs 33 s per picosecond and OpenCL runs 0.24 s --
+a factor of 138. The same 270 ps screen is 2.5 hours on CPU and 89 seconds on
+OpenCL, which is the difference between a feature and a thing nobody will wait
+for. `best_platform()` takes the fastest of CUDA, OpenCL, CPU and reports which
+one it used.
+
+A structure that cannot be integrated is refused before any dynamics rather
+than after. The synthetic bundles in `examples/` are built from ideal phi/psi
+with virtual CB atoms, start at +6.3e6 kJ/mol, and *rise* under minimisation
+because atoms sit on top of each other; left alone, OpenMM raises `Particle
+coordinate is NaN` nine minutes later and names neither the structure nor the
+reason. The energy is now checked once after minimisation and the refusal says
+what is wrong. Real structures land far below zero -- 2A3D minimises to
+-13,196 kJ/mol.
+
+Needs OpenMM and PDBFixer, which are conda packages rather than wheels:
+
+```bash
+conda install -c conda-forge openmm pdbfixer
+```
+
+The hosted build does not carry them, so the panel there explains why instead
+of offering a button that can only fail. Capped at 200 residues — past that the
+wait stops being worth what a run this short can tell you.
+
+---
+
 ## A negative result worth keeping
 
 Protein language model likelihood looks like a cheap way to check a designed sequence is plausible. It was tested and rejected.

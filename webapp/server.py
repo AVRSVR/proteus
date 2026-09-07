@@ -13,6 +13,7 @@ from proteus.engine import Engine
 from proteus.scoring import FittedScorer, HeuristicScorer
 from proteus.strategies import REGISTRY
 from proteus.validate import PredictedStructureGate
+from proteus import md as _md
 from proteus import mpnn as _mpnn
 
 app = Flask(__name__, static_folder=str(Path(__file__).parent))
@@ -117,6 +118,7 @@ def analyze():
             "fitted_r": 0.303,
             "mpnn_r": 0.331,
             "mpnn_available": _mpnn.available(),
+            "md_available": _md.available(),
             "best_published_r": 0.460,
             "best_published_name": "ACDC-NN",
             "foldx_r": 0.214,
@@ -518,6 +520,12 @@ def _search_worker(job_id: str, pdb_text: str, chain: str | None,
     publish(phase="baseline")
     base_rmsd, base_plddt, base_passed, base_note = fold_and_check(
         structure.sequence)
+    # Kept, not discarded. The MD screen needs a "before" structure from the
+    # same predictor as the "after": comparing an ESMFold model against the
+    # crystal or predicted input would measure the difference between two
+    # modelling methods as much as the difference between two sequences.
+    with SEARCH_LOCK:
+        SEARCH_JOBS[job_id]["baseline_pdb"] = SEARCH_JOBS[job_id].get("last_pdb")
     publish(baseline={"sc_rmsd": base_rmsd, "plddt": base_plddt,
                       "passed": base_passed, "note": base_note})
     if base_rmsd is not None and not base_passed:
@@ -626,7 +634,8 @@ def search_status(job_id):
             return jsonify({"error": "unknown job"}), 404
         # last_pdb can be large; it is fetched separately when wanted.
         return jsonify({k: v for k, v in job.items()
-                        if k not in ("last_pdb", "winner_pdb")})
+                        if k not in ("last_pdb", "winner_pdb",
+                                     "baseline_pdb")})
 
 
 @app.post("/api/search/cancel/<job_id>")
@@ -640,9 +649,14 @@ def search_cancel(job_id):
 
 @app.get("/api/search/structure/<job_id>")
 def search_structure(job_id):
+    """The winning structure, or with ?which=baseline the unmutated one."""
+    which = request.args.get("which", "")
     with SEARCH_LOCK:
         job = SEARCH_JOBS.get(job_id) or {}
-        pdb_out = job.get("winner_pdb") or job.get("last_pdb")
+        if which == "baseline":
+            pdb_out = job.get("baseline_pdb")
+        else:
+            pdb_out = job.get("winner_pdb") or job.get("last_pdb")
     if not pdb_out:
         return jsonify({"error": "no folded structure for this job yet"}), 404
     return jsonify({"pdb": pdb_out})
@@ -666,6 +680,91 @@ def validate():
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"error": str(exc)}), 400
+
+
+MD_JOBS: dict[str, dict] = {}
+MD_LOCK = threading.Lock()
+
+#: A screen this size is minutes of CPU. Past it the wait stops being worth
+#: what a run this short can tell you, and the answer belongs on a cluster.
+MD_MAX_RESIDUES = 200
+
+
+def _md_worker(job_id, before_pdb, after_pdb, replicates, production_ps):
+    def publish(**kw):
+        with MD_LOCK:
+            MD_JOBS[job_id].update(kw)
+
+    def cancelled():
+        with MD_LOCK:
+            return bool(MD_JOBS.get(job_id, {}).get("cancel"))
+
+    try:
+        publish(phase="input")
+        result = _md.compare(before_pdb, after_pdb, replicates=replicates,
+                             production_ps=production_ps,
+                             should_stop=cancelled)
+        publish(state="done", **result)
+    except Exception as exc:
+        traceback.print_exc()
+        publish(state="failed", error=str(exc))
+
+
+@app.post("/api/md/start")
+def md_start():
+    """Screen the input and the design under identical short MD runs."""
+    data = request.get_json(force=True)
+    if not _md.available():
+        return jsonify({"error": (
+            "molecular dynamics needs OpenMM and PDBFixer, which are conda "
+            "packages and are not installed in this environment. The hosted "
+            "build does not carry them; run the server locally to use this."
+        )}), 400
+
+    before_pdb = (data.get("before") or "").strip()
+    after_pdb = (data.get("after") or "").strip()
+    if not before_pdb or not after_pdb:
+        return jsonify({"error": "both structures are required"}), 400
+
+    # Counted off the input rather than trusted from the client.
+    n_res = len({line[22:27] for line in before_pdb.splitlines()
+                 if line.startswith("ATOM")})
+    if n_res > MD_MAX_RESIDUES:
+        return jsonify({"error": (
+            f"{n_res} residues is past the {MD_MAX_RESIDUES} this screen will "
+            "attempt; a run that size needs a cluster, not a web request."
+        )}), 400
+
+    replicates = max(_md.MIN_REPLICATES, min(5, int(data.get("replicates", 3))))
+    production_ps = max(10.0, min(200.0, float(data.get("ps", 45.0))))
+
+    job_id = uuid.uuid4().hex[:12]
+    with MD_LOCK:
+        MD_JOBS[job_id] = {"state": "running", "phase": "starting",
+                           "replicates": replicates,
+                           "production_ps": production_ps}
+    threading.Thread(target=_md_worker, daemon=True,
+                     args=(job_id, before_pdb, after_pdb, replicates,
+                           production_ps)).start()
+    return jsonify({"job": job_id})
+
+
+@app.get("/api/md/status/<job_id>")
+def md_status(job_id):
+    with MD_LOCK:
+        job = MD_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"error": "unknown job"}), 404
+    return jsonify(job)
+
+
+@app.post("/api/md/cancel/<job_id>")
+def md_cancel(job_id):
+    with MD_LOCK:
+        if job_id not in MD_JOBS:
+            return jsonify({"error": "unknown job"}), 404
+        MD_JOBS[job_id]["cancel"] = True
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
