@@ -131,13 +131,44 @@ def test_one_replicate_is_refused():
 def test_a_real_trajectory_runs_and_reports_finite_numbers():
     from pathlib import Path
 
-    pdb = Path("examples/soluble_bundle.pdb").read_text(encoding="utf-8")
+    pdb = Path("examples/2a3d.pdb").read_text(encoding="utf-8")
     s = md.simulate(pdb, replicates=2, production_ps=10, equilibration_ps=1)
     assert len(s.trajectories) == 2
     for t in s.trajectories:
         assert len(t.rg) >= 8
         assert 5.0 < t.rg_mean < 60.0
     assert s.rg_drift_spread == s.rg_drift_spread      # not NaN
+
+
+@pytest.mark.skipif(not md.available(), reason="OpenMM/PDBFixer not installed")
+def test_a_clashing_structure_is_refused_before_it_wastes_a_run():
+    """The synthetic bundles cannot be simulated, and must say so quickly.
+
+    Built from ideal phi/psi via NeRF with virtual CB atoms, they start at
+    +6.3e6 kJ/mol and rise under minimisation because atoms overlap. Left to
+    run, dynamics produces `Particle coordinate is NaN` after nine minutes of
+    setup, naming neither the structure nor the cause.
+    """
+    from pathlib import Path
+
+    pdb = Path("examples/soluble_bundle.pdb").read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="overlapping"):
+        md.simulate(pdb, replicates=2, production_ps=10, equilibration_ps=1)
+
+
+@pytest.mark.skipif(not md.available(), reason="OpenMM/PDBFixer not installed")
+def test_the_fastest_available_platform_is_chosen():
+    """CPU is 138x slower, which is the difference between usable and not."""
+    _plat, name = md.best_platform()
+    assert name in md.PLATFORM_PREFERENCE
+    available = set()
+    import openmm
+    for i in range(openmm.Platform.getNumPlatforms()):
+        available.add(openmm.Platform.getPlatform(i).getName())
+    for preferred in md.PLATFORM_PREFERENCE:
+        if preferred in available:
+            assert name == preferred, "a faster platform was available"
+            break
 
 
 @pytest.mark.skipif(not md.available(), reason="OpenMM/PDBFixer not installed")
@@ -149,7 +180,31 @@ def test_replicates_of_one_structure_differ_only_by_noise():
     """
     from pathlib import Path
 
-    pdb = Path("examples/soluble_bundle.pdb").read_text(encoding="utf-8")
+    pdb = Path("examples/2a3d.pdb").read_text(encoding="utf-8")
     s = md.simulate(pdb, replicates=2, production_ps=10, equilibration_ps=1)
     a, b = (t.rg_mean for t in s.trajectories)
     assert abs(a - b) < 2.0, "replicates of one structure diverged implausibly"
+
+
+@pytest.mark.skipif(not md.available(), reason="OpenMM/PDBFixer not installed")
+def test_a_structure_is_not_better_than_itself():
+    """The null control: the same structure on both sides of the comparison.
+
+    Any difference here is thermal noise by construction, so a large delta
+    would mean the measure is reading something other than what it claims.
+    Measured at the shipped settings (3 replicates, 45 ps) the delta is 0.06 A
+    against a 0.09 A noise floor, which the verdict correctly refuses to
+    resolve. This test uses a shorter run and asserts only the robust half --
+    that the delta stays small -- because whether a 0.06 A difference lands
+    inside a 0.09 A floor is itself a coin flip at low replicate counts, and a
+    test that flips is worse than no test.
+    """
+    from pathlib import Path
+
+    pdb = Path("examples/2a3d.pdb").read_text(encoding="utf-8")
+    out = md.compare(pdb, pdb, replicates=2, production_ps=15,
+                     equilibration_ps=2)
+    assert abs(out["delta_rg_drift"]) < 0.5, (
+        f"a structure drifted {out['delta_rg_drift']:.2f} A differently from "
+        "itself; the measure is not reading thermal noise")
+    assert out["before"]["n_residues"] == out["after"]["n_residues"] == 73

@@ -43,6 +43,35 @@ TEMPERATURE_K = 310.0
 FRICTION_PER_PS = 1.0
 REPORT_INTERVAL_PS = 1.0
 
+#: Tried in order. The difference is not a detail: measured on a 1140-atom
+#: structure, CPU runs 33 s per picosecond and OpenCL runs 0.24 s -- a factor
+#: of 138. A default screen is 45 ps x 3 replicates x 2 structures = 270 ps,
+#: which is 2.5 hours on the CPU platform and about a minute on OpenCL. The
+#: screen is only usable at all because of this, so the platform actually
+#: chosen is reported rather than left implicit.
+PLATFORM_PREFERENCE = ("CUDA", "OpenCL", "CPU")
+
+#: A prepared structure whose minimised energy is above this is not a protein
+#: the forcefield can integrate. Real structures land well below zero: 2A3D
+#: minimises to -13,196 kJ/mol. A synthetic backbone built from ideal phi/psi
+#: with virtual CB atoms started at +6.28e6 and *rose* under minimisation,
+#: because atoms sit on top of each other and no gradient step can separate
+#: them. Dynamics then produced a NaN in 0.9 s. Catching it here turns nine
+#: minutes of wasted integration into an immediate, explicable refusal.
+MAX_MINIMISED_ENERGY_KJ = 1e5
+
+
+def best_platform():
+    """The fastest available platform, and why it was chosen."""
+    import openmm
+
+    available = {openmm.Platform.getPlatform(i).getName()
+                 for i in range(openmm.Platform.getNumPlatforms())}
+    for name in PLATFORM_PREFERENCE:
+        if name in available:
+            return openmm.Platform.getPlatformByName(name), name
+    raise RuntimeError(f"no usable OpenMM platform among {sorted(available)}")
+
 
 def available() -> bool:
     try:
@@ -110,6 +139,7 @@ class Screen:
     trajectories: list[Trajectory] = field(default_factory=list)
     n_atoms: int = 0
     n_residues: int = 0
+    platform: str = ""
 
     @staticmethod
     def _spread(values: list[float]) -> float:
@@ -221,12 +251,13 @@ def simulate(pdb_text: str, *, replicates: int = DEFAULT_REPLICATES,
     masses = [system.getParticleMass(i).value_in_unit(unit.dalton)
               for i in heavy]
 
+    platform, platform_name = best_platform()
     screen = Screen(n_atoms=system.getNumParticles(),
-                    n_residues=fixer.topology.getNumResidues())
+                    n_residues=fixer.topology.getNumResidues(),
+                    platform=platform_name)
     steps_per_report = max(1, int(REPORT_INTERVAL_PS * 1000 / TIMESTEP_FS))
     equil_steps = int(equilibration_ps * 1000 / TIMESTEP_FS)
     n_reports = max(8, int(production_ps / REPORT_INTERVAL_PS))
-    platform = openmm.Platform.getPlatformByName("CPU")
 
     for r in range(replicates):
         if should_stop is not None and should_stop():
@@ -238,6 +269,20 @@ def simulate(pdb_text: str, *, replicates: int = DEFAULT_REPLICATES,
         sim = app.Simulation(fixer.topology, system, integrator, platform)
         sim.context.setPositions(fixer.positions)
         sim.minimizeEnergy(maxIterations=500)
+
+        # Checked once, before any dynamics. A structure the forcefield cannot
+        # relax will produce a NaN a few steps in, and the exception OpenMM
+        # raises then names neither the structure nor the reason.
+        energy = sim.context.getState(getEnergy=True).getPotentialEnergy()
+        kj = energy.value_in_unit(unit.kilojoule_per_mole)
+        if not (kj == kj) or kj > MAX_MINIMISED_ENERGY_KJ:
+            raise ValueError(
+                f"this structure minimises to {kj:.3g} kJ/mol, which is not a "
+                "geometry the forcefield can integrate -- it almost always "
+                "means atoms are overlapping. Predicted and experimental "
+                "structures land well below zero. Dynamics would fail with an "
+                "uninformative NaN a few steps in, so it is refused here.")
+
         sim.context.setVelocitiesToTemperature(
             TEMPERATURE_K * unit.kelvin, seed + r + 1)
         sim.step(equil_steps)
